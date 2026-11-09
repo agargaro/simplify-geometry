@@ -1,47 +1,92 @@
-import type { BufferGeometry, InterleavedBufferAttribute, TypedArray } from 'three';
+import type { BufferGeometry, TypedArray } from 'three';
+import { isInterleavedAttribute, unusedVertex, type GeometryAttribute } from './GeometryAttributes.js';
 import type { SimplifyAttributes } from './Simplify.js';
-import type { GeometryAttribute } from './RemapGeometry.js';
-import { validateAttributeComponents, validateAttributeWeight, validateWeightedAttribute } from './Validation.js';
+import { hasPositiveWeight, validateAttributeComponents, validateAttributeWeight, validateWeightedAttribute } from './Validation.js';
 
 export type AttributeWeights = Record<string, number | number[]>;
 
 /** @internal */
-export function packAttributes(geometry: BufferGeometry, attributeWeights?: AttributeWeights): SimplifyAttributes | undefined {
+export interface PackedAttributes extends SimplifyAttributes {
+  names: string[];
+}
+
+/**
+ * Attributes whose weights are all 0 do not affect meshoptimizer and are not packed.
+ * @internal
+ */
+export function packAttributes(geometry: BufferGeometry, attributeWeights?: AttributeWeights): PackedAttributes | undefined {
   if (attributeWeights === undefined) return undefined;
 
+  const names = getWeightedNames(geometry, attributeWeights);
+
+  if (names.length === 0) return undefined;
+
+  const weights = getWeights(geometry, attributeWeights, names);
+  const stride = weights.length;
+  const array = new Float32Array(stride * geometry.getAttribute('position').count);
+
+  writeAttributes(array, stride, geometry, names);
+
+  return { array, stride, weights, names };
+}
+
+/**
+ * Writes the positions and packed attributes updated by meshoptimizer to `geometry`, the level compacted with `remap`.
+ * Normals and tangents are renormalized.
+ * @internal
+ */
+export function unpackAttributes(geometry: BufferGeometry, remap: Uint32Array, positionArray: Float32Array, attributes?: PackedAttributes): void {
+  readAttribute(positionArray, 3, 0, geometry.getAttribute('position'), remap);
+
+  if (attributes === undefined) return;
+
+  const names = attributes.names;
+  let srcOffset = 0;
+
+  for (let i = 0, l = names.length; i < l; i++) {
+    const attribute = geometry.getAttribute(names[i]);
+    const isDirection = names[i] === 'normal' || names[i] === 'tangent';
+
+    if (isDirection) normalizeDirections(attributes.array, attributes.stride, srcOffset, remap);
+
+    readAttribute(attributes.array, attributes.stride, srcOffset, attribute, remap);
+    srcOffset += attribute.itemSize;
+  }
+}
+
+function getWeightedNames(geometry: BufferGeometry, attributeWeights: AttributeWeights): string[] {
   const names = Object.keys(attributeWeights);
-  const verticesCount = geometry.getAttribute('position').count;
+  const weightedNames: string[] = [];
+
+  for (let i = 0, l = names.length; i < l; i++) {
+    const name = names[i];
+    const weight = attributeWeights[name];
+
+    validateWeightedAttribute(geometry, name);
+    validateAttributeWeight(weight, geometry.getAttribute(name).itemSize, name);
+
+    if (hasPositiveWeight(weight)) weightedNames.push(name);
+  }
+
+  return weightedNames;
+}
+
+function getWeights(geometry: BufferGeometry, attributeWeights: AttributeWeights, names: string[]): number[] {
   const weights: number[] = [];
 
   for (let i = 0, l = names.length; i < l; i++) {
-    const attribute = getAttribute(geometry, names[i]);
+    const weight = attributeWeights[names[i]];
+    const itemSize = geometry.getAttribute(names[i]).itemSize;
+    const isWeightList = Array.isArray(weight);
 
-    pushWeights(weights, attributeWeights[names[i]], attribute.itemSize, names[i]);
+    for (let j = 0; j < itemSize; j++) {
+      weights.push(isWeightList ? weight[j] : weight);
+    }
   }
 
   validateAttributeComponents(weights.length);
 
-  const array = new Float32Array(weights.length * verticesCount);
-
-  writeAttributes(array, weights.length, geometry, names);
-
-  return { array, stride: weights.length, weights };
-}
-
-function getAttribute(geometry: BufferGeometry, name: string): GeometryAttribute {
-  validateWeightedAttribute(geometry, name);
-
-  return geometry.getAttribute(name);
-}
-
-function pushWeights(weights: number[], weight: number | number[], itemSize: number, name: string): void {
-  validateAttributeWeight(weight, itemSize, name);
-
-  const isWeightList = Array.isArray(weight);
-
-  for (let i = 0; i < itemSize; i++) {
-    weights.push(isWeightList ? weight[i] : weight);
-  }
+  return weights;
 }
 
 function writeAttributes(dstArray: Float32Array, dstStride: number, geometry: BufferGeometry, names: string[]): void {
@@ -56,13 +101,13 @@ function writeAttributes(dstArray: Float32Array, dstStride: number, geometry: Bu
 }
 
 function writeAttribute(dstArray: Float32Array, dstStride: number, dstOffset: number, attribute: GeometryAttribute): void {
-  const isInterleaved = (attribute as Partial<InterleavedBufferAttribute>).isInterleavedBufferAttribute === true;
-  const srcArray = isInterleaved ? (attribute as InterleavedBufferAttribute).data.array : attribute.array;
-  const srcStride = isInterleaved ? (attribute as InterleavedBufferAttribute).data.stride : attribute.itemSize;
-  const srcOffset = isInterleaved ? (attribute as InterleavedBufferAttribute).offset : 0;
+  const isInterleaved = isInterleavedAttribute(attribute);
+  const srcArray = attribute.array;
+  const srcStride = isInterleaved ? attribute.data.stride : attribute.itemSize;
+  const srcOffset = isInterleaved ? attribute.offset : 0;
   const itemSize = attribute.itemSize;
   const divisor = attribute.normalized ? getNormalizationScale(srcArray) : 1;
-  const minValue = attribute.normalized ? -1 : -Infinity;
+  const minValue = attribute.normalized && isSignedIntegerArray(srcArray) ? -1 : -Infinity;
 
   for (let i = 0, l = attribute.count; i < l; i++) {
     const dstIndex = i * dstStride + dstOffset;
@@ -74,10 +119,56 @@ function writeAttribute(dstArray: Float32Array, dstStride: number, dstOffset: nu
   }
 }
 
+function readAttribute(srcArray: Float32Array, srcStride: number, srcOffset: number, attribute: GeometryAttribute, remap: Uint32Array): void {
+  const isInterleaved = isInterleavedAttribute(attribute);
+  const dstArray = attribute.array;
+  const dstStride = isInterleaved ? attribute.data.stride : attribute.itemSize;
+  const dstOffset = isInterleaved ? attribute.offset : 0;
+  const itemSize = attribute.itemSize;
+  const scale = attribute.normalized ? getNormalizationScale(dstArray) : 1;
+  const minValue = isSignedIntegerArray(dstArray) ? -1 : 0;
+
+  for (let i = 0, l = remap.length; i < l; i++) {
+    const dstVertex = remap[i];
+
+    if (dstVertex === unusedVertex) continue;
+
+    const srcIndex = i * srcStride + srcOffset;
+    const dstIndex = dstVertex * dstStride + dstOffset;
+
+    for (let j = 0; j < itemSize; j++) {
+      dstArray[dstIndex + j] = quantize(srcArray[srcIndex + j], scale, minValue);
+    }
+  }
+}
+
+function quantize(value: number, scale: number, minValue: number): number {
+  if (scale === 1) return value;
+
+  return Math.round(Math.min(Math.max(value, minValue), 1) * scale);
+}
+
+function normalizeDirections(array: Float32Array, stride: number, offset: number, remap: Uint32Array): void {
+  for (let i = 0, l = remap.length; i < l; i++) {
+    if (remap[i] === unusedVertex) continue;
+
+    const index = i * stride + offset;
+    const x = array[index];
+    const y = array[index + 1];
+    const z = array[index + 2];
+    const length = Math.sqrt(x * x + y * y + z * z);
+
+    if (length === 0) continue;
+
+    array[index] = x / length;
+    array[index + 1] = y / length;
+    array[index + 2] = z / length;
+  }
+}
+
 function getNormalizationScale(array: TypedArray): number {
   const type = array.constructor;
 
-  if (type === Float32Array) return 1;
   if (type === Uint8Array || type === Uint8ClampedArray) return 255;
   if (type === Int8Array) return 127;
   if (type === Uint16Array) return 65535;
@@ -85,5 +176,11 @@ function getNormalizationScale(array: TypedArray): number {
   if (type === Uint32Array) return 4294967295;
   if (type === Int32Array) return 2147483647;
 
-  throw new TypeError('"geometry" normalized attributes must use an integer or Float32Array component type.');
+  return 1;
+}
+
+function isSignedIntegerArray(array: TypedArray): boolean {
+  const type = array.constructor;
+
+  return type === Int8Array || type === Int16Array || type === Int32Array;
 }

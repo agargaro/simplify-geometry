@@ -4,6 +4,7 @@ import { getScale, simplifyGeometryLOD, simplifyReady, type SimplifyGeometryResu
 import {
   AmbientLight,
   BatchedMesh,
+  type BufferGeometry,
   Color,
   DirectionalLight,
   Fog,
@@ -48,22 +49,25 @@ const geometries = [
 
 const geometriesLOD = geometries.map((geometry) => simplifyGeometryLOD(geometry, levels, { vertices: 'reordered' }));
 
+const indexCounts = geometriesLOD.map(getIndexCount);
 let vertexCount = 0;
 let indexCount = 0;
 
-for (const geometryLOD of geometriesLOD) {
-  vertexCount += geometryLOD[0].geometry.getAttribute('position').count;
-  indexCount += getIndexCount(geometryLOD);
+for (let i = 0; i < geometriesLOD.length; i++) {
+  vertexCount += geometriesLOD[i][0].geometry.getAttribute('position').count;
+  indexCount += indexCounts[i];
 }
 
 const batchedMesh = new BatchedMesh(instancesCount, vertexCount, indexCount, new MeshStandardMaterial({ metalness: 0.2, roughness: 0.2 }));
 batchedMesh.customSort = createRadixSort(batchedMesh);
 
-for (const geometryLOD of geometriesLOD) {
-  const geometryId = batchedMesh.addGeometry(geometryLOD[0].geometry, -1, getIndexCount(geometryLOD));
+for (let i = 0; i < geometriesLOD.length; i++) {
+  const geometryLOD = geometriesLOD[i];
+  const geometryId = batchedMesh.addGeometry(geometryLOD[0].geometry, -1, indexCounts[i]);
+  const screenMetricScale = getScreenMetricScale(geometryLOD[0].geometry);
 
-  for (let i = 1; i < geometryLOD.length; i++) {
-    batchedMesh.addGeometryLOD(geometryId, geometryLOD[i].geometry, getScreenMetric(geometryLOD, i));
+  for (let j = 1; j < geometryLOD.length; j++) {
+    batchedMesh.addGeometryLOD(geometryId, geometryLOD[j].geometry, screenMetricScale / geometryLOD[j].error);
   }
 }
 
@@ -103,14 +107,12 @@ function getIndexCount(geometryLOD: SimplifyGeometryResult[]): number {
   return count;
 }
 
-function getScreenMetric(geometryLOD: SimplifyGeometryResult[], level: number): number {
-  const geometry = geometryLOD[0].geometry;
+function getScreenMetricScale(geometry: BufferGeometry): number {
   const meshScale = getScale(geometry.getAttribute('position').array as Float32Array);
 
   geometry.computeBoundingSphere();
 
   const radius = geometry.boundingSphere?.radius ?? 0;
-  const worldError = geometryLOD[level].error * meshScale;
 
-  return (2 * maxErrorPixels * radius) / (worldError * window.innerHeight);
+  return (2 * maxErrorPixels * radius) / (meshScale * window.innerHeight);
 }

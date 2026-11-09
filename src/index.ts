@@ -1,5 +1,5 @@
 export type { AttributeWeights } from './PackAttributes.js';
-export { getScale, simplify, simplifyReady, type SimplifyAttributes, type SimplifyParams, type SimplifyResult } from './Simplify.js';
+export { getScale, simplify, simplifyReady, type IndexArray, type SimplifyAttributes, type SimplifyParams, type SimplifyResult } from './Simplify.js';
 export {
   simplifyGeometry,
   simplifyGeometryLOD,

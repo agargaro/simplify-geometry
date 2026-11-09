@@ -28,7 +28,8 @@ const params: SimplifyGeometryParams = {
   regularizeLight: false,
   permissive: false,
   preserveFolds: false,
-  errorClamped: false
+  errorClamped: false,
+  updateVertices: false
 };
 
 const attributeWeights = { normal: 0, uv: 0 };
@@ -47,6 +48,7 @@ pane.addBinding(params, 'regularizeLight');
 pane.addBinding(params, 'permissive');
 pane.addBinding(params, 'preserveFolds');
 pane.addBinding(params, 'errorClamped');
+pane.addBinding(params, 'updateVertices');
 pane.addBinding(attributeWeights, 'normal', { label: 'normalWeight', min: 0, max: 2, step: 0.01 });
 pane.addBinding(attributeWeights, 'uv', { label: 'uvWeight', min: 0, max: 2, step: 0.01 });
 pane.addBinding(stats, 'error', { readonly: true, format: (value: number) => value.toExponential(3) });
