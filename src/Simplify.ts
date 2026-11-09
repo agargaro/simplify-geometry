@@ -18,6 +18,12 @@ export interface SimplifyParams {
   preserveFolds?: boolean;
   errorClamped?: boolean;
   vertexLock?: Uint8Array;
+  /**
+   * Uses meshoptimizer `simplifySloppy`: faster and able to merge disconnected parts, but it ignores seams, borders and attributes,
+   * so the result has a larger error. Supports only `ratio`, `error`, `errorAbsolute`, `vertexLock` and `optimizeMemory`.
+   * @default false
+   */
+  sloppy?: boolean;
   /** @default true */
   optimizeMemory?: boolean;
 }
@@ -62,6 +68,16 @@ export function getScale(srcPositionArray: Float32Array): number {
   return MeshoptSimplifier.getScale(srcPositionArray, 3);
 }
 
+/**
+ * Maps every vertex to the first vertex with the same position. Vertices that share a position but not their attributes lie on a seam.
+ */
+export function generatePositionRemap(srcPositionArray: Float32Array): Uint32Array {
+  validateReady();
+  validatePositionArray(srcPositionArray);
+
+  return MeshoptSimplifier.generatePositionRemap(srcPositionArray, 3);
+}
+
 /** @internal */
 export function validateReady(): void {
   if (!isReady) throw new Error('"simplifyReady()" must be awaited before using the simplifier.');
@@ -72,11 +88,13 @@ export function validateReady(): void {
  * @internal
  */
 export function simplifyIndexArray(indexArray: Uint32Array, positionArray: Float32Array, params: SimplifyParams, attributes?: SimplifyAttributes): [Uint32Array, number] {
-  const { targetCount, error, vertexLock, flags } = getSimplifierOptions(params, indexArray.length);
+  const options = getSimplifierOptions(params, indexArray.length);
   const { array, stride, weights } = attributes ?? emptyAttributes;
 
+  if (params.sloppy === true) return simplifySloppyIndexArray(indexArray, positionArray, params, options);
+
   return MeshoptSimplifier.simplifyWithAttributes(
-    indexArray, positionArray, 3, array, stride, weights, vertexLock, targetCount, error, flags
+    indexArray, positionArray, 3, array, stride, weights, options.vertexLock, options.targetCount, options.error, options.flags
   );
 }
 
@@ -116,6 +134,16 @@ export function toIndexArray(indexArray: Uint32Array, srcBytesPerIndex: number, 
   if (bytesPerIndex === 2) return new Uint16Array(indexArray);
 
   return indexArray;
+}
+
+function simplifySloppyIndexArray(indexArray: Uint32Array, positionArray: Float32Array, params: SimplifyParams, options: SimplifierOptions): [Uint32Array, number] {
+  const scale = params.errorAbsolute === true ? MeshoptSimplifier.getScale(positionArray, 3) : 1;
+  const error = Math.min(options.error / scale, unlimitedError);
+  const [dstIndexArray, resultError] = MeshoptSimplifier.simplifySloppy(
+    indexArray, positionArray, 3, options.vertexLock, options.targetCount, error
+  );
+
+  return [dstIndexArray, resultError * scale];
 }
 
 function getSimplifierOptions(params: SimplifyParams, indicesCount: number): SimplifierOptions {

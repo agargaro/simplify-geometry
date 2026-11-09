@@ -9,6 +9,9 @@ const maxAttributeStride = 64;
 const normalizableArrayTypes: unknown[] = [
   Float32Array, Uint8Array, Uint8ClampedArray, Int8Array, Uint16Array, Int16Array, Uint32Array, Int32Array
 ];
+const sloppyUnsupportedFlags = [
+  'lockBorder', 'sparse', 'prune', 'regularize', 'regularizeLight', 'permissive', 'preserveFolds', 'errorClamped'
+] as const satisfies readonly (keyof SimplifyParams)[];
 
 /** @internal */
 export function validateSimplifyArgs(indexArray: IndexArray, positionArray: Float32Array, params: SimplifyParams, attributes?: SimplifyAttributes): void {
@@ -16,7 +19,9 @@ export function validateSimplifyArgs(indexArray: IndexArray, positionArray: Floa
   if (indexArray.length % 3 !== 0) throw new RangeError('"srcIndexArray" length must be a multiple of 3.');
   validatePositionArray(positionArray);
   validateParams(params, positionArray.length / 3);
-  if (attributes !== undefined) validateAttributes(attributes, positionArray.length / 3);
+  if (attributes === undefined) return;
+  if (params.sloppy === true) throw new Error('"srcAttributes" must not be used with "sloppy": sloppy simplification ignores attributes.');
+  validateAttributes(attributes, positionArray.length / 3);
 }
 
 /** @internal */
@@ -37,6 +42,18 @@ export function validateParams(params: SimplifyParams, verticesCount: number): v
   if (!isErrorValid) throw new RangeError('"error" must be greater than or equal to 0.');
   if (isRegularizeConflicting) throw new Error('"regularize" and "regularizeLight" must not be enabled together.');
   validateVertexLock(params.vertexLock, verticesCount);
+  validateSloppyFlags(params);
+}
+
+/**
+ * Validates the parameters of a geometry or LOD level, after merging them with the shared LOD parameters.
+ * @internal
+ */
+export function validateLevelParams(geometry: BufferGeometry, params: SimplifyGeometryLevelParams, vertices: string | undefined): void {
+  validateParams(params, geometry.getAttribute('position').count);
+  validateUpdateVertices(geometry, params, vertices);
+  validateSloppyLevel(params);
+  validateProtectSeams(geometry, params);
 }
 
 /** @internal */
@@ -55,16 +72,6 @@ export function validateGeometry(geometry: BufferGeometry): void {
 /** @internal */
 export function validateVertices(vertices: string | undefined, allowed: Record<string, true>): void {
   if (vertices !== undefined && !Object.hasOwn(allowed, vertices)) throw new Error(`"vertices" must be one of: ${Object.keys(allowed).join(', ')}.`);
-}
-
-/** @internal */
-export function validateUpdateVertices(geometry: BufferGeometry, params: SimplifyGeometryLevelParams, vertices: string | undefined): void {
-  if (params.updateVertices !== true) return;
-
-  const isCompact = vertices === undefined || vertices === 'compact';
-
-  if (!isCompact) throw new Error('"updateVertices" requires "vertices" to be "compact": updated vertices cannot be shared.');
-  if (params.attributes !== undefined) validateUpdatedAttributes(geometry, params.attributes);
 }
 
 /**
@@ -107,6 +114,56 @@ export function validateAttributeWeight(weight: number | number[], itemSize: num
 /** @internal */
 export function validateAttributeComponents(componentsCount: number): void {
   if (componentsCount > maxAttributeComponents) throw new RangeError(`"attributes" must have at most ${maxAttributeComponents} components in total.`);
+}
+
+function validateSloppyFlags(params: SimplifyParams): void {
+  if (params.sloppy !== true) return;
+
+  for (let i = 0, l = sloppyUnsupportedFlags.length; i < l; i++) {
+    const flag = sloppyUnsupportedFlags[i];
+
+    if (params[flag] === true) throw new Error(`"${flag}" must not be enabled with "sloppy": sloppy simplification does not support it.`);
+  }
+}
+
+function validateUpdateVertices(geometry: BufferGeometry, params: SimplifyGeometryLevelParams, vertices: string | undefined): void {
+  if (params.updateVertices !== true) return;
+
+  const isCompact = vertices === undefined || vertices === 'compact';
+
+  if (!isCompact) throw new Error('"updateVertices" requires "vertices" to be "compact": updated vertices cannot be shared.');
+  if (params.attributes !== undefined) validateUpdatedAttributes(geometry, params.attributes);
+}
+
+function validateSloppyLevel(params: SimplifyGeometryLevelParams): void {
+  if (params.sloppy !== true) return;
+  if (params.updateVertices === true) throw new Error('"updateVertices" must not be enabled with "sloppy": sloppy simplification cannot update vertices.');
+  if (params.attributes !== undefined && hasWeightedAttribute(params.attributes)) {
+    throw new Error('"attributes" must not have positive weights with "sloppy": sloppy simplification ignores attributes.');
+  }
+}
+
+function hasWeightedAttribute(attributeWeights: AttributeWeights): boolean {
+  const names = Object.keys(attributeWeights);
+
+  for (let i = 0, l = names.length; i < l; i++) {
+    if (hasPositiveWeight(attributeWeights[names[i]])) return true;
+  }
+
+  return false;
+}
+
+function validateProtectSeams(geometry: BufferGeometry, params: SimplifyGeometryLevelParams): void {
+  const names = params.protectSeams;
+
+  if (names === undefined) return;
+  if (params.permissive !== true) throw new Error('"protectSeams" requires "permissive": seams are already preserved without it.');
+
+  for (let i = 0, l = names.length; i < l; i++) {
+    if (names[i] === 'position') throw new Error('"protectSeams" must not include "position": seams are found by position.');
+    if (!geometry.hasAttribute(names[i])) throw new Error(`"geometry" must have a "${names[i]}" attribute.`);
+    if (isInstancedAttribute(geometry.getAttribute(names[i]))) throw new TypeError(`"geometry" "${names[i]}" attribute must not be instanced.`);
+  }
 }
 
 function validateUpdatedAttributes(geometry: BufferGeometry, attributeWeights: AttributeWeights): void {

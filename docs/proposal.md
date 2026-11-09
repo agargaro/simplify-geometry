@@ -48,6 +48,15 @@ Proposal: expose it as `simplifyPoints(srcPositionArray, { ratio, optimizeMemory
 - `compactMesh` requires triangle indices, so the remap must be built by the library.
 - meshoptimizer does not return an error. LOD generation for point clouds can come later.
 
+## Remeshing and normal generation (experimental)
+
+meshoptimizer 1.3 adds two experimental features that are deferred until their APIs are stable.
+
+- `MeshoptSimplifier.remesh(indices, positions, stride, resolution, flags?)` rebuilds the surface on a voxel grid (`resolution` from 4 to 256, flags `Shell` and `Solve`). It returns a non-indexed triangle soup with positions only (9 floats per triangle): the attributes are lost, so the library would need to weld the vertices, rebuild the index and decide how to handle normals and UVs. It is not documented in the meshoptimizer README yet.
+- `MeshoptTangents.generateNormals(indices, positions, stride, creaseAngle, smoothing?)` computes normals from positions, splitting hard edges above the crease angle. It returns one normal per triangle corner, so applying it requires de-indexing the mesh or splitting the vertices with different normals. It lives in the separate `meshoptimizer/tangents` module, so using it adds a second WebAssembly module to the bundle.
+
+Possible uses: `remesh` for the coarsest LOD levels of meshes that simplification cannot reduce, and `generateNormals` to rebuild the normals of remeshed or heavily simplified levels. The same module also provides `generateTangents`, which has the same per-corner output.
+
 ## Cascaded LOD generation
 
 Today every LOD level is simplified from the source geometry.

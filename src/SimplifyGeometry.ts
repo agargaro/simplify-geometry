@@ -1,8 +1,9 @@
 import { BufferAttribute, type BufferGeometry } from 'three';
-import { getIndexArray } from './GeometryAttributes.js';
+import { createSeamLock, getIndexArray } from './GeometryAttributes.js';
 import { packAttributes, unpackAttributes, type AttributeWeights, type PackedAttributes } from './PackAttributes.js';
 import { compactGeometry, createSharedGeometry, reorderGeometry } from './RemapGeometry.js';
 import {
+  generatePositionRemap,
   simplifyIndexArray,
   toIndexArray,
   toMeshoptIndexArray,
@@ -11,7 +12,7 @@ import {
   type IndexArray,
   type SimplifyParams
 } from './Simplify.js';
-import { validateGeometry, validateParams, validateUpdateVertices, validateVertices } from './Validation.js';
+import { validateGeometry, validateLevelParams, validateVertices } from './Validation.js';
 
 export interface SimplifyGeometryLevelParams extends SimplifyParams {
   attributes?: AttributeWeights;
@@ -24,6 +25,11 @@ export interface SimplifyGeometryLevelParams extends SimplifyParams {
    * @default false
    */
   updateVertices?: boolean;
+  /**
+   * Names of the attributes whose seams are protected in `permissive` mode: vertices that share a position but have different values
+   * of these attributes are protected (2) in `vertexLock`, while the other seams can still collapse. Requires `permissive`.
+   */
+  protectSeams?: string[];
 }
 
 export interface SimplifyGeometryParams extends SimplifyGeometryLevelParams {
@@ -55,11 +61,11 @@ export function simplifyGeometry(geometry: BufferGeometry, params: SimplifyGeome
   validateReady();
   validateGeometry(geometry);
   validateVertices(params.vertices, geometryVertices);
-  validateParams(params, geometry.getAttribute('position').count);
-  validateUpdateVertices(geometry, params, params.vertices);
+  validateLevelParams(geometry, params, params.vertices);
 
+  const levelParams = params.protectSeams === undefined ? params : withSeamLock(geometry, params, getPositionRemap(geometry));
   const srcAttributes = packAttributes(geometry, params.attributes);
-  const level = simplifyLevel(geometry, toMeshoptIndexArray(getIndexArray(geometry)), params, srcAttributes);
+  const level = simplifyLevel(geometry, toMeshoptIndexArray(getIndexArray(geometry)), levelParams, srcAttributes);
 
   return { geometry: createLevel(geometry, level, params.vertices, params.optimizeMemory), error: level.error };
 }
@@ -78,18 +84,32 @@ export function simplifyGeometryLOD(geometry: BufferGeometry, levels: SimplifyGe
 }
 
 function getLevelsParams(geometry: BufferGeometry, levels: SimplifyGeometryLevelParams[], params: SimplifyGeometryLODParams): SimplifyGeometryLevelParams[] {
-  const verticesCount = geometry.getAttribute('position').count;
   const levelsParams = new Array<SimplifyGeometryLevelParams>(levels.length);
+  let positionRemap: Uint32Array | undefined;
 
   for (let i = 0, l = levels.length; i < l; i++) {
     const levelParams = { ...params, ...levels[i] };
 
-    validateParams(levelParams, verticesCount);
-    validateUpdateVertices(geometry, levelParams, params.vertices);
-    levelsParams[i] = levelParams;
+    validateLevelParams(geometry, levelParams, params.vertices);
+
+    if (levelParams.protectSeams === undefined) {
+      levelsParams[i] = levelParams;
+      continue;
+    }
+
+    positionRemap ??= getPositionRemap(geometry);
+    levelsParams[i] = withSeamLock(geometry, levelParams, positionRemap);
   }
 
   return levelsParams;
+}
+
+function getPositionRemap(geometry: BufferGeometry): Uint32Array {
+  return generatePositionRemap(geometry.getAttribute('position').array as Float32Array);
+}
+
+function withSeamLock<T extends SimplifyGeometryLevelParams>(geometry: BufferGeometry, params: T, positionRemap: Uint32Array): T {
+  return { ...params, vertexLock: createSeamLock(geometry, params.protectSeams ?? [], positionRemap, params.vertexLock) };
 }
 
 function packLevelsAttributes(geometry: BufferGeometry, levelsParams: SimplifyGeometryLevelParams[]): (PackedAttributes | undefined)[] {
