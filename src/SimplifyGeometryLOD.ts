@@ -1,23 +1,24 @@
-import { BufferGeometry } from 'three';
-import { SimplifyParams } from './Simplify.js';
+import type { BufferGeometry } from 'three';
+import type { SimplifyParams } from './Simplify.js';
 import { simplifyGeometry } from './SimplifyGeometry.js';
 
-export async function simplifyGeometryLOD(geometry: BufferGeometry, paramsList: SimplifyParams[]): Promise<BufferGeometry[]> {
+export function simplifyGeometryLOD(geometry: BufferGeometry, paramsList: SimplifyParams[]): BufferGeometry[] {
   const geometries: BufferGeometry[] = [geometry];
 
-  for (const params of paramsList) {
-    geometries.push(await simplifyGeometry(geometry, params));
+  for (let i = 0, l = paramsList.length; i < l; i++) {
+    geometries.push(simplifyGeometry(geometry, paramsList[i]));
   }
 
   return geometries;
 }
 
-export async function simplifyGeometriesLOD(geometries: BufferGeometry[], paramsList: SimplifyParams[] | SimplifyParams[][]): Promise<BufferGeometry[][]> {
+export function simplifyGeometriesLOD(geometries: BufferGeometry[], paramsList: SimplifyParams[] | SimplifyParams[][]): BufferGeometry[][] {
   const result: BufferGeometry[][] = [];
 
-  for (let i = 0; i < geometries.length; i++) {
+  for (let i = 0, l = geometries.length; i < l; i++) {
     const paramsArray = (Array.isArray(paramsList[i]) ? paramsList[i] : paramsList) as SimplifyParams[];
-    result.push(await simplifyGeometryLOD(geometries[i], paramsArray));
+
+    result.push(simplifyGeometryLOD(geometries[i], paramsArray));
   }
 
   return result;

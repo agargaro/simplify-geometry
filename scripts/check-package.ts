@@ -57,10 +57,14 @@ assert(/from ['"]three['"]/.test(bundle), 'three must stay external');
 assert(/from ['"]meshoptimizer['"]/.test(bundle), 'meshoptimizer must stay external');
 checkSourceMap(root, packageRoot, 'build/index.js');
 writeFileSync(join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
-const probe = `import { simplifyGeometry } from '@three.ez/simplify-geometry';
+const probe = `import { simplifyGeometry, simplifyReady } from '@three.ez/simplify-geometry';
 import { TorusKnotGeometry } from 'three';
 const geometry = new TorusKnotGeometry(1, 0.4, 64, 8);
-const simplified = await simplifyGeometry(geometry, { ratio: 0.5 });
+let threwBeforeReady = false;
+try { simplifyGeometry(geometry, { ratio: 0.5 }); } catch { threwBeforeReady = true; }
+if (!threwBeforeReady) throw new Error('simplifyGeometry must throw before simplifyReady');
+await simplifyReady();
+const simplified = simplifyGeometry(geometry, { ratio: 0.5 });
 const index = simplified.index;
 if (index === null || geometry.index === null || index.count === 0 || index.count >= geometry.index.count) throw new Error('Invalid package runtime');
 `;

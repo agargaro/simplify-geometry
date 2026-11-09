@@ -1,8 +1,10 @@
 import { Main, PerspectiveCameraAuto } from '@three.ez/main';
-import { simplifyGeometries, SimplifyParams } from '@three.ez/simplify-geometry';
+import { simplifyGeometries, simplifyReady, type SimplifyParams } from '@three.ez/simplify-geometry';
 import { AmbientLight, DirectionalLight, Mesh, MeshNormalMaterial, Scene, TorusKnotGeometry } from 'three';
-import { OrbitControls } from 'three/examples/jsm/Addons.js';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Pane } from 'tweakpane';
+
+await simplifyReady();
 
 const main = new Main();
 const scene = new Scene().activeSmartRendering();
@@ -53,9 +55,9 @@ pane.addBinding(params, 'lockBorder');
 pane.addBinding(params, 'prune');
 pane.addBinding(params, 'sparse');
 
-async function onChange(): Promise<void> {
+function onChange(): void {
   console.time('simplifyGeometries');
-  const geometries = await simplifyGeometries(originalGeometries, params);
+  const geometries = simplifyGeometries(originalGeometries, params);
   console.timeEnd('simplifyGeometries');
 
   for (let i = 0; i < originalGeometries.length; i++) {

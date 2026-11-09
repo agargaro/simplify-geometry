@@ -1,12 +1,15 @@
-import { Asset, Main, PerspectiveCameraAuto } from '@three.ez/main';
-import { simplifyGeometry, SimplifyParams } from '@three.ez/simplify-geometry';
-import { AmbientLight, DirectionalLight, Mesh, Scene, TorusKnotGeometry } from 'three';
-import { GLTF, GLTFLoader, OrbitControls } from 'three/examples/jsm/Addons.js';
+import { Main, PerspectiveCameraAuto } from '@three.ez/main';
+import { simplifyGeometry, simplifyReady, type SimplifyParams } from '@three.ez/simplify-geometry';
+import { AmbientLight, DirectionalLight, Mesh, Scene } from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { Pane } from 'tweakpane';
+
+await simplifyReady();
 
 const main = new Main();
 
-const glb = await Asset.load<GLTF>(GLTFLoader, 'https://threejs.org/examples/models/gltf/Soldier.glb');
+const glb = await new GLTFLoader().loadAsync('https://threejs.org/examples/models/gltf/Soldier.glb');
 const soldierGroup = glb.scene.children[0];
 const dummy = soldierGroup.children[0] as Mesh;
 
@@ -20,8 +23,7 @@ const params: SimplifyParams = {
   errorAbsolute: false,
   lockBorder: false,
   prune: false,
-  sparse: false,
-  logAppearanceError: true
+  sparse: false
 };
 
 const pane = new Pane();
@@ -39,8 +41,8 @@ const controls = new OrbitControls(camera, main.renderer.domElement);
 controls.update();
 main.createView({ scene, camera });
 
-async function onChange(): Promise<void> {
-  mesh.geometry = await simplifyGeometry(originalGeometry, params) as TorusKnotGeometry;
+function onChange(): void {
+  mesh.geometry = simplifyGeometry(originalGeometry, params);
   scene.needsRender = true;
 }
 
