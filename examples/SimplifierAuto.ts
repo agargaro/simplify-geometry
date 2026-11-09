@@ -1,5 +1,5 @@
 import { Main, PerspectiveCameraAuto } from '@three.ez/main';
-import { simplifyGeometriesByErrorLOD, simplifyReady, type SimplifyParams } from '@three.ez/simplify-geometry';
+import { simplifyGeometries, simplifyReady, type SimplifyParams } from '@three.ez/simplify-geometry';
 import { AmbientLight, DirectionalLight, Mesh, MeshNormalMaterial, Scene, TorusKnotGeometry } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Pane } from 'tweakpane';
@@ -43,8 +43,7 @@ const params: SimplifyParams = {
   errorAbsolute: false,
   lockBorder: false,
   prune: false,
-  sparse: false,
-  logAppearanceError: false
+  sparse: false
 };
 
 const pane = new Pane();
@@ -58,7 +57,7 @@ pane.addBinding(params, 'sparse');
 
 function onChange(): void {
   console.time('simplifyGeometries');
-  const geometries = simplifyGeometriesByErrorLOD(originalGeometries, params);
+  const geometries = simplifyGeometries(originalGeometries, params);
   console.timeEnd('simplifyGeometries');
 
   for (let i = 0; i < originalGeometries.length; i++) {
