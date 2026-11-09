@@ -1,4 +1,5 @@
-import type { BufferAttribute, BufferGeometry, InterleavedBufferAttribute } from 'three';
+import type { BufferGeometry, InterleavedBufferAttribute } from 'three';
+import { isInstancedAttribute, type GeometryAttribute, type MorphAttributes } from './RemapGeometry.js';
 import type { SimplifyAttributes, SimplifyParams, SimplifyResult } from './Simplify.js';
 
 const maxAttributeComponents = 32;
@@ -11,6 +12,11 @@ export function validateArrays(indexArray: SimplifyResult[0], positionArray: Flo
 
   if (!isIndexTypeSupported) throw new TypeError('"srcIndexArray" must be a Uint32Array, a Uint16Array or a Uint8Array.');
   if (indexArray.length % 3 !== 0) throw new RangeError('"srcIndexArray" length must be a multiple of 3.');
+  validatePositionArray(positionArray);
+}
+
+/** @internal */
+export function validatePositionArray(positionArray: Float32Array): void {
   if (positionArray.constructor !== Float32Array) throw new TypeError('"srcPositionArray" must be a Float32Array.');
   if (positionArray.length % 3 !== 0) throw new RangeError('"srcPositionArray" length must be a multiple of 3.');
 }
@@ -36,14 +42,23 @@ export function validateVertexData(verticesCount: number, vertexLock?: Uint8Arra
 
 /** @internal */
 export function validateGeometry(geometry: BufferGeometry): void {
+  const isDefaultDrawRange = geometry.drawRange.start === 0 && geometry.drawRange.count === Infinity;
+
   if (geometry.index === null) throw new Error('"geometry" must be indexed: non-indexed geometries are not supported.');
   if (geometry.groups.length > 0) throw new Error('"geometry" must not have groups: geometry groups are not supported.');
+  if (!isDefaultDrawRange) throw new Error('"geometry" must use the default draw range: custom draw ranges are not supported.');
   if (!geometry.hasAttribute('position')) throw new Error('"geometry" must have a "position" attribute.');
   validatePosition(geometry.getAttribute('position'));
+  validateVertexAttributes(geometry);
 }
 
 /** @internal */
-export function validateGeometryAttribute(geometry: BufferGeometry, name: string, verticesCount: number): void {
+export function validateVertices(vertices: string | undefined, allowed: readonly string[]): void {
+  if (vertices !== undefined && !allowed.includes(vertices)) throw new Error(`"vertices" must be one of: ${allowed.join(', ')}.`);
+}
+
+/** @internal */
+export function validateWeightedAttribute(geometry: BufferGeometry, name: string): void {
   if (name === 'position') throw new Error('"attributes" must not include "position": positions are always used.');
   if (!geometry.hasAttribute(name)) throw new Error(`"geometry" must have a "${name}" attribute.`);
 
@@ -51,7 +66,7 @@ export function validateGeometryAttribute(geometry: BufferGeometry, name: string
   const isFloat16 = (attribute as Partial<{ isFloat16BufferAttribute: boolean }>).isFloat16BufferAttribute === true;
 
   if (isFloat16) throw new TypeError(`"geometry" "${name}" attribute must not be a Float16BufferAttribute: half float attributes are not supported.`);
-  if (attribute.count !== verticesCount) throw new RangeError(`"geometry" "${name}" attribute count must match the position count.`);
+  if (isInstancedAttribute(attribute)) throw new TypeError(`"geometry" "${name}" attribute must not be instanced: per-instance attributes cannot be weighted.`);
 }
 
 /** @internal */
@@ -63,7 +78,7 @@ export function validateAttributeWeight(weight: number | number[], itemSize: num
 
 /** @internal */
 export function validateAttributeComponents(componentsCount: number): void {
-  if (componentsCount > maxAttributeComponents) throw new RangeError('"attributes" must have at most 32 components in total.');
+  if (componentsCount > maxAttributeComponents) throw new RangeError(`"attributes" must have at most ${maxAttributeComponents} components in total.`);
 }
 
 function validateVertexLock(vertexLock: Uint8Array, verticesCount: number): void {
@@ -76,8 +91,8 @@ function validateAttributes(attributes: SimplifyAttributes, verticesCount: numbe
   const isStrideValid = Number.isInteger(stride) && stride >= weights.length && stride <= maxAttributeStride;
 
   if (array.constructor !== Float32Array) throw new TypeError('"srcAttributes.array" must be a Float32Array.');
-  if (weights.length > maxAttributeComponents) throw new RangeError('"srcAttributes.weights" length must be at most 32.');
-  if (!isStrideValid) throw new RangeError('"srcAttributes.stride" must be an integer between "srcAttributes.weights" length and 64.');
+  if (weights.length > maxAttributeComponents) throw new RangeError(`"srcAttributes.weights" length must be at most ${maxAttributeComponents}.`);
+  if (!isStrideValid) throw new RangeError(`"srcAttributes.stride" must be an integer between "srcAttributes.weights" length and ${maxAttributeStride}.`);
   if (array.length !== stride * verticesCount) throw new RangeError('"srcAttributes.array" length must be "srcAttributes.stride" times the vertex count.');
   if (!areWeightsValid(weights)) throw new RangeError('"srcAttributes.weights" values must be greater than or equal to 0.');
 }
@@ -90,9 +105,34 @@ function areWeightsValid(weights: number[]): boolean {
   return true;
 }
 
-function validatePosition(position: BufferAttribute | InterleavedBufferAttribute): void {
+function validateVertexAttributes(geometry: BufferGeometry): void {
+  const verticesCount = geometry.getAttribute('position').count;
+  const names = Object.keys(geometry.attributes);
+  const morphAttributes = geometry.morphAttributes as MorphAttributes;
+  const morphNames = Object.keys(morphAttributes);
+
+  for (let i = 0, l = names.length; i < l; i++) {
+    validateVertexAttributeCount(geometry.getAttribute(names[i]), verticesCount, `"geometry" "${names[i]}" attribute`);
+  }
+
+  for (let i = 0, l = morphNames.length; i < l; i++) {
+    const morphList = morphAttributes[morphNames[i]];
+
+    for (let j = 0, m = morphList.length; j < m; j++) {
+      validateVertexAttributeCount(morphList[j], verticesCount, `"geometry" "${morphNames[i]}" morph attribute ${j}`);
+    }
+  }
+}
+
+function validateVertexAttributeCount(attribute: GeometryAttribute, verticesCount: number, label: string): void {
+  const isCountValid = isInstancedAttribute(attribute) || attribute.count === verticesCount;
+
+  if (!isCountValid) throw new RangeError(`${label} count must match the position count.`);
+}
+
+function validatePosition(position: GeometryAttribute): void {
   const isInterleaved = (position as Partial<InterleavedBufferAttribute>).isInterleavedBufferAttribute === true;
 
-  if (isInterleaved) throw new TypeError('"geometry" position must not be interleaved: interleaved attributes are not supported.');
-  if (position.itemSize !== 3) throw new RangeError('"geometry" position must have an itemSize of 3.');
+  if (isInterleaved) throw new TypeError('"geometry" "position" attribute must not be interleaved: interleaved positions are not supported.');
+  if (position.itemSize !== 3) throw new RangeError('"geometry" "position" attribute must have an itemSize of 3.');
 }

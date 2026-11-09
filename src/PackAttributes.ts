@@ -1,10 +1,9 @@
-import type { BufferAttribute, BufferGeometry, InterleavedBufferAttribute, TypedArray } from 'three';
+import type { BufferGeometry, InterleavedBufferAttribute, TypedArray } from 'three';
 import type { SimplifyAttributes } from './Simplify.js';
-import { validateAttributeComponents, validateAttributeWeight, validateGeometryAttribute } from './Validation.js';
+import type { GeometryAttribute } from './RemapGeometry.js';
+import { validateAttributeComponents, validateAttributeWeight, validateWeightedAttribute } from './Validation.js';
 
 export type AttributeWeights = Record<string, number | number[]>;
-
-type GeometryAttribute = BufferAttribute | InterleavedBufferAttribute;
 
 /** @internal */
 export function packAttributes(geometry: BufferGeometry, attributeWeights?: AttributeWeights): SimplifyAttributes | undefined {
@@ -15,7 +14,7 @@ export function packAttributes(geometry: BufferGeometry, attributeWeights?: Attr
   const weights: number[] = [];
 
   for (let i = 0, l = names.length; i < l; i++) {
-    const attribute = getAttribute(geometry, names[i], verticesCount);
+    const attribute = getAttribute(geometry, names[i]);
 
     pushWeights(weights, attributeWeights[names[i]], attribute.itemSize, names[i]);
   }
@@ -29,8 +28,8 @@ export function packAttributes(geometry: BufferGeometry, attributeWeights?: Attr
   return { array, stride: weights.length, weights };
 }
 
-function getAttribute(geometry: BufferGeometry, name: string, verticesCount: number): GeometryAttribute {
-  validateGeometryAttribute(geometry, name, verticesCount);
+function getAttribute(geometry: BufferGeometry, name: string): GeometryAttribute {
+  validateWeightedAttribute(geometry, name);
 
   return geometry.getAttribute(name);
 }

@@ -67,8 +67,9 @@ try { simplifyGeometry(geometry, { ratio: 0.5 }); } catch { threwBeforeReady = t
 if (!threwBeforeReady) throw new Error('simplifyGeometry must throw before simplifyReady');
 await simplifyReady();
 const simplified = simplifyGeometry(geometry, { ratio: 0.5 });
-const index = simplified.index;
+const index = simplified.geometry.index;
 if (index === null || geometry.index === null || index.count === 0 || index.count >= geometry.index.count) throw new Error('Invalid package runtime');
+if (!(simplified.error >= 0)) throw new Error('Invalid simplification error');
 `;
 writeFileSync(join(consumer, 'consumer.ts'), probe);
 writeFileSync(join(consumer, 'tsconfig.json'), JSON.stringify({
