@@ -1,9 +1,10 @@
 import { MeshoptSimplifier, type SimplifierFlags } from 'meshoptimizer/simplifier';
+import { validateArrays, validateParams, validateVertexData } from './Validation.js';
 
 export type SimplifyResult = [Uint32Array | Uint16Array | Uint8Array, number];
 
 export interface SimplifyParams {
-  ratio: number;
+  ratio?: number;
   error?: number;
   lockBorder?: boolean;
   errorAbsolute?: boolean;
@@ -13,8 +14,18 @@ export interface SimplifyParams {
   regularizeLight?: boolean;
   permissive?: boolean;
   preserveFolds?: boolean;
+  errorClamped?: boolean;
+  vertexLock?: Uint8Array;
   optimizeMemory?: boolean; // default true
 }
+
+export interface SimplifyAttributes {
+  array: Float32Array;
+  stride: number;
+  weights: number[];
+}
+
+const emptyAttributes: SimplifyAttributes = { array: new Float32Array(0), stride: 0, weights: [] };
 
 let isReady = false;
 
@@ -23,42 +34,33 @@ export async function simplifyReady(): Promise<void> {
   isReady = true;
 }
 
-export function simplify(srcIndexArray: SimplifyResult[0], srcPositionArray: Float32Array, params: SimplifyParams): SimplifyResult {
+export function simplify(srcIndexArray: SimplifyResult[0], srcPositionArray: Float32Array, params: SimplifyParams, srcAttributes?: SimplifyAttributes): SimplifyResult {
   if (!isReady) throw new Error('"simplifyReady()" must be awaited before simplifying.');
   validateArrays(srcIndexArray, srcPositionArray);
   validateParams(params);
+  validateVertexData(srcPositionArray.length / 3, params.vertexLock, srcAttributes);
 
-  const flags = getFlags(params);
-  const error = params.error ?? 1;
-  const targetCount = 3 * Math.floor(params.ratio * (srcIndexArray.length / 3));
   const meshoptIndexArray = toMeshoptIndexArray(srcIndexArray);
   const bytesPerIndex = getDstBytesPerIndex(srcIndexArray, srcPositionArray.length / 3, params.optimizeMemory !== false);
 
-  const result: SimplifyResult = MeshoptSimplifier.simplify(meshoptIndexArray, srcPositionArray, 3, targetCount, error, flags);
+  const result = runSimplifier(meshoptIndexArray, srcPositionArray, params, srcAttributes);
 
   result[0] = toIndexArray(result[0], bytesPerIndex);
 
   return result;
 }
 
-function validateArrays(indexArray: SimplifyResult[0], positionArray: Float32Array): void {
-  const indexType = indexArray.constructor;
-  const isIndexTypeSupported = indexType === Uint32Array || indexType === Uint16Array || indexType === Uint8Array;
+function runSimplifier(indexArray: Uint32Array, positionArray: Float32Array, params: SimplifyParams, attributes?: SimplifyAttributes): SimplifyResult {
+  const flags = getFlags(params);
+  const error = params.error ?? 1;
+  const ratio = params.ratio ?? 0;
+  const targetCount = 3 * Math.floor((ratio) * (indexArray.length / 3));
+  const vertexLock = params.vertexLock ?? null;
+  const { array, stride, weights } = attributes ?? emptyAttributes;
 
-  if (!isIndexTypeSupported) throw new TypeError('"srcIndexArray" must be a Uint32Array, a Uint16Array or a Uint8Array.');
-  if (indexArray.length % 3 !== 0) throw new RangeError('"srcIndexArray" length must be a multiple of 3.');
-  if (positionArray.constructor !== Float32Array) throw new TypeError('"srcPositionArray" must be a Float32Array.');
-  if (positionArray.length % 3 !== 0) throw new RangeError('"srcPositionArray" length must be a multiple of 3.');
-}
-
-function validateParams(params: SimplifyParams): void {
-  const isRatioValid = params.ratio >= 0 && params.ratio <= 1;
-  const isErrorValid = params.error === undefined || params.error >= 0;
-  const isRegularizeConflicting = params.regularize === true && params.regularizeLight === true;
-
-  if (!isRatioValid) throw new RangeError('"ratio" must be between 0 and 1.');
-  if (!isErrorValid) throw new RangeError('"error" must be greater than or equal to 0.');
-  if (isRegularizeConflicting) throw new Error('"regularize" and "regularizeLight" must not be enabled together.');
+  return MeshoptSimplifier.simplifyWithAttributes(
+    indexArray, positionArray, 3, array, stride, weights, vertexLock, targetCount, error, flags
+  );
 }
 
 function getFlags(params: SimplifyParams): SimplifierFlags[] {
@@ -72,6 +74,7 @@ function getFlags(params: SimplifyParams): SimplifierFlags[] {
   if (params.regularizeLight === true) flags.push('RegularizeLight');
   if (params.permissive === true) flags.push('Permissive');
   if (params.preserveFolds === true) flags.push('PreserveFolds');
+  if (params.errorClamped === true) flags.push('ErrorClamped');
 
   return flags;
 }
