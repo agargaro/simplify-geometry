@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      three:
+        patterns:
+          - three
+          - '@types/three'
+      eslint:
+        patterns:
+          - eslint
+          - '@eslint/*'
+          - typescript-eslint
+          - '@stylistic/*'
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
