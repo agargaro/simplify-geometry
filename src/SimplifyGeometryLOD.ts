@@ -1,8 +1,7 @@
 import type { BufferGeometry } from 'three';
-import type { SimplifyParams } from './Simplify.js';
-import { simplifyGeometry } from './SimplifyGeometry.js';
+import { simplifyGeometry, type SimplifyGeometryParams } from './SimplifyGeometry.js';
 
-export function simplifyGeometryLOD(geometry: BufferGeometry, paramsList: SimplifyParams[]): BufferGeometry[] {
+export function simplifyGeometryLOD(geometry: BufferGeometry, paramsList: SimplifyGeometryParams[]): BufferGeometry[] {
   const geometries: BufferGeometry[] = [geometry];
 
   for (let i = 0, l = paramsList.length; i < l; i++) {
@@ -12,11 +11,11 @@ export function simplifyGeometryLOD(geometry: BufferGeometry, paramsList: Simpli
   return geometries;
 }
 
-export function simplifyGeometriesLOD(geometries: BufferGeometry[], paramsList: SimplifyParams[] | SimplifyParams[][]): BufferGeometry[][] {
+export function simplifyGeometriesLOD(geometries: BufferGeometry[], paramsList: SimplifyGeometryParams[] | SimplifyGeometryParams[][]): BufferGeometry[][] {
   const result: BufferGeometry[][] = [];
 
   for (let i = 0, l = geometries.length; i < l; i++) {
-    const paramsArray = (Array.isArray(paramsList[i]) ? paramsList[i] : paramsList) as SimplifyParams[];
+    const paramsArray = (Array.isArray(paramsList[i]) ? paramsList[i] : paramsList) as SimplifyGeometryParams[];
 
     result.push(simplifyGeometryLOD(geometries[i], paramsArray));
   }

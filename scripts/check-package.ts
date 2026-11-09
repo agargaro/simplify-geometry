@@ -35,8 +35,10 @@ const output = execFileSync(process.execPath, [npmCli, 'pack', '--ignore-scripts
   encoding: 'utf8'
 });
 const packs: unknown = JSON.parse(output);
-assert(Array.isArray(packs) && packs.length === 1);
-const pack: unknown = packs[0];
+assert(typeof packs === 'object' && packs !== null);
+const packList: unknown[] = Array.isArray(packs) ? packs : Object.values(packs);
+assert(packList.length === 1);
+const pack: unknown = packList[0];
 assert(typeof pack === 'object' && pack !== null && 'filename' in pack && typeof pack.filename === 'string');
 const packageRoot = join(consumer, 'node_modules', '@three.ez', 'simplify-geometry');
 mkdirSync(packageRoot, { recursive: true });
@@ -54,7 +56,7 @@ for (const file of readdirSync(join(root, 'src'), { recursive: true, encoding: '
 assert.deepEqual(packedFiles.filter((file) => file.endsWith('.js')), ['build/index.js']);
 const bundle = readFileSync(join(packageRoot, 'build', 'index.js'), 'utf8');
 assert(/from ['"]three['"]/.test(bundle), 'three must stay external');
-assert(/from ['"]meshoptimizer['"]/.test(bundle), 'meshoptimizer must stay external');
+assert(/from ['"]meshoptimizer\/simplifier['"]/.test(bundle), 'meshoptimizer must stay external');
 checkSourceMap(root, packageRoot, 'build/index.js');
 writeFileSync(join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
 const probe = `import { simplifyGeometry, simplifyReady } from '@three.ez/simplify-geometry';

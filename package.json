@@ -38,13 +38,13 @@
     "level-of-detail",
     "performance"
   ],
-  "homepage": "https://github.com/agargaro/three-ez-simplify-geometry#readme",
+  "homepage": "https://github.com/agargaro/simplify-geometry#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/agargaro/three-ez-simplify-geometry.git"
+    "url": "git+https://github.com/agargaro/simplify-geometry.git"
   },
   "bugs": {
-    "url": "https://github.com/agargaro/three-ez-simplify-geometry/issues"
+    "url": "https://github.com/agargaro/simplify-geometry/issues"
   },
   "scripts": {
     "start": "vite",
