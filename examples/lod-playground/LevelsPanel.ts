@@ -1,5 +1,5 @@
 import { createElement } from './Controls.js';
-import { formatCount, formatDecimal, formatDistance, formatPercent, formatTime } from './Format.js';
+import { formatCount, formatDecimal, formatDistance, formatPercent } from './Format.js';
 import { icon } from './Icons.js';
 import { levelColors, type PreviewStats } from './LODPreview.js';
 import { getLevels, maxLevels, type Settings } from './Settings.js';
@@ -13,6 +13,7 @@ export interface LevelsPanelCallbacks {
   onHover: (level: number) => void;
   onAdd: () => void;
   onRemove: () => void;
+  onMeasure: () => void;
 }
 
 export class LevelsPanel {
@@ -23,7 +24,8 @@ export class LevelsPanel {
   private readonly addButton = createElement('button', 'icon-button');
   private readonly removeButton = createElement('button', 'icon-button');
   private readonly list = createElement('ol', 'level-list');
-  private readonly summary = createElement('p', 'summary');
+  private readonly buildButton = createElement('button', 'tool-button build-button');
+  private readonly buildTime = createElement('span', 'build-time');
   /** Holds the settings shared by every level, under the list. */
   readonly settingsContainer = createElement('div', 'levels-settings');
   private readonly drawn = createElement('span', 'drawn-value');
@@ -46,6 +48,8 @@ export class LevelsPanel {
     const drawnRow = createElement('div', 'drawn');
     const drawnLabel = createElement('span', 'drawn-label');
     const drawnTrack = createElement('span', 'drawn-track');
+    const credits = createElement('p', 'credits');
+    const buildRow = createElement('div', 'build');
 
     title.textContent = 'Levels';
     setIconButton(this.removeButton, 'minus', 'Remove level', descriptions.removeLevel);
@@ -70,17 +74,24 @@ export class LevelsPanel {
     drawnLabel.dataset['tooltip'] = 'Triangles drawn in the current frame, against drawing every visible instance with level 0.';
     drawnTrack.append(this.drawnBar);
     drawnRow.append(drawnLabel, this.drawn, drawnTrack);
-    footer.append(drawnRow, this.summary);
+    credits.innerHTML = 'Simplified with <a href="https://github.com/zeux/meshoptimizer" target="_blank" rel="noopener">meshoptimizer</a>'
+      + ' · Imp and Puglin by <a href="https://quaternius.com" target="_blank" rel="noopener">Quaternius</a> (CC0)'
+      + ' · Horse by <a href="https://mirada.com/" target="_blank" rel="noopener">mirada</a> for <a href="http://www.ro.me" target="_blank" rel="noopener">ROME</a>,'
+      + ' from the <a href="https://threejs.org/examples/#webgl_morphtargets_horse" target="_blank" rel="noopener">three.js examples</a>';
+    this.buildButton.type = 'button';
+    this.buildButton.textContent = 'Measure build time';
+    this.buildButton.dataset['tooltip'] = descriptions.measureBuild;
+    this.buildButton.addEventListener('click', callbacks.onMeasure);
+    buildRow.append(this.buildButton, this.buildTime);
+    footer.append(drawnRow, buildRow, credits);
     root.append(header, heads, this.list, this.settingsContainer, footer);
   }
 
   render(snapshot: Snapshot): void {
-    const { lod, draw, thresholds, used, model, fov, warnings } = snapshot;
+    const { lod, thresholds, used, fov, warnings } = snapshot;
     const levels = lod.levels;
-    const levelSettings = getLevels(this.settings);
-    const settingsCount = levelSettings.length;
+    const settingsCount = getLevels(this.settings).length;
     const fullTriangles = getTriangles(levels[0].geometry);
-    let totalTriangles = 0;
 
     this.rows = [];
     this.liveCells = [];
@@ -95,20 +106,11 @@ export class LevelsPanel {
       const isUnused = level > 0 && !used[level - 1];
       const meta: string[] = [];
 
-      totalTriangles += triangles;
       if (level === 0) meta.push('<span>source mesh</span>');
       else if (isUnused) meta.push('<span class="is-warn">never used</span>');
       else meta.push(`<span data-tooltip="${descriptions.levelSwitch}">${this.formatSwitch(thresholds[level - 1], lod.radius, fov)}</span>`);
 
       if (level > 0) meta.push(`<span data-tooltip="${descriptions.levelError}">error ${this.formatError(levels[level].error)}</span>`);
-
-      if (model.skin !== null) {
-        const influences = draw.influences[level];
-        const frames = level > 0 && !levelSettings[level - 1].interpolateFrames ? 'nearest frame' : 'blended frames';
-
-        meta.push(`<span data-tooltip="${descriptions.levelBones}">${influences} ${influences === 1 ? 'bone' : 'bones'} per vertex</span>`);
-        meta.push(`<span data-tooltip="${descriptions.levelFrames}">${frames}</span>`);
-      }
 
       row.type = 'button';
       row.dataset['level'] = String(level);
@@ -141,10 +143,14 @@ export class LevelsPanel {
     this.count.textContent = String(levels.length);
     this.addButton.disabled = settingsCount >= maxLevels;
     this.removeButton.disabled = settingsCount === 0;
+  }
 
-    const skinTime = model.skin !== null ? ` · skin ${formatTime(draw.time)}` : '';
-
-    this.summary.textContent = `Simplified in ${formatTime(lod.time)}${skinTime} · LOD indices +${formatPercent(totalTriangles / fullTriangles - 1)} over L0`;
+  /**
+   * Shows the result of the last build measurement, or clears it with an empty text when the settings change.
+   */
+  setBuildTime(text: string, isMeasuring = false): void {
+    this.buildTime.textContent = text;
+    this.buildButton.disabled = isMeasuring;
   }
 
   select(level: number): void {
@@ -184,14 +190,14 @@ export class LevelsPanel {
   }
 
   private formatError(error: number): string {
-    return this.settings.errorAbsolute ? `${formatDecimal(error)} u` : `${formatPercent(error)} of size`;
+    return this.settings.errorAbsolute ? `${formatDecimal(error)} units` : `${formatPercent(error)} of size`;
   }
 
   private formatSwitch(threshold: number, radius: number, fov: number): string {
     const distance = formatDistance(getSwitchDistance(threshold, radius, this.settings, fov));
     const screenSize = formatPercent(getSwitchScreenSize(threshold, radius, this.settings, fov));
 
-    return `from ${distance} u (${screenSize} of screen)`;
+    return `camera ≥ ${distance} units · screen space height ≤ ${screenSize}`;
   }
 }
 

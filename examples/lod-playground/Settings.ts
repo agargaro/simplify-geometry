@@ -11,14 +11,9 @@ export type LevelFlags = Record<SimplifyFlag, boolean>;
 
 export interface LevelSettings extends LevelFlags {
   ratio: number;
-  limitError: boolean;
   error: number;
   sloppy: boolean;
   updateVertices: boolean;
-  /** Bone influences per vertex drawn by the level: 0 picks them from the skin error. */
-  maxInfluences: number;
-  /** Whether the level blends the two nearest baked frames or reads the nearest one. */
-  interpolateFrames: boolean;
   screenSize: number;
   distance: number;
   hysteresis: number;
@@ -34,7 +29,6 @@ export interface Settings {
   errorAbsolute: boolean;
   protectNormalSeams: boolean;
   protectUvSeams: boolean;
-  skinError: number;
   thresholdMode: ThresholdMode;
   pixelError: number;
   models: Record<ModelName, ModelSettings>;
@@ -42,6 +36,8 @@ export interface Settings {
   instances: number;
   /** Smallest distance between two instances of the distance layout, in mesh radii. */
   spread: number;
+  /** Vertical field of view of the camera, in degrees. */
+  fov: number;
   layout: PreviewLayout;
   shading: ShadingMode;
   colorByLevel: boolean;
@@ -59,10 +55,17 @@ export const maxLevels = 8;
 export const instanceSpacing = 2.2;
 export const instancesRange: [number, number] = [50, 5000];
 export const spreadRange: [number, number] = [1.2, 8];
+export const fovRange: [number, number] = [20, 90];
 
-const defaultErrors = [0.005, 0.01, 0.02, 0.04];
-const defaultScreenSizes = [0.4, 0.2, 0.1, 0.05];
-const defaultDistances = [10, 20, 40, 80];
+const defaultErrors = [0.002, 0.005, 0.01, 0.02];
+const defaultScreenSizes = [0.8, 0.4, 0.2, 0.1];
+const defaultDistances = [5, 10, 20, 40];
+const defaultHysteresis = 0.1;
+/**
+ * Levels from this error on default to permissive and regularize: far away, a seam that opens costs less than the triangles it saves,
+ * and more regular triangles deform better under skinning.
+ */
+const farLevelError = 0.01;
 
 export function createDefaultSettings(): Settings {
   return {
@@ -71,12 +74,12 @@ export function createDefaultSettings(): Settings {
     errorAbsolute: false,
     protectNormalSeams: false,
     protectUvSeams: false,
-    skinError: 1,
     thresholdMode: 'pixelError',
-    pixelError: 1,
+    pixelError: 0.7,
     models: { imp: createModelSettings(), puglin: createModelSettings(), horse: createModelSettings(), custom: createModelSettings() },
-    instances: 1000,
+    instances: 500,
     spread: 2.2,
+    fov: 50,
     layout: 'distance',
     shading: 'clay',
     colorByLevel: true,
@@ -109,7 +112,7 @@ export function createNextLevel(previous: LevelSettings | undefined): LevelSetti
   return {
     ...previous,
     ratio: previous.ratio / 2,
-    error: Math.min(previous.error * 2.5, 1),
+    error: Math.min(previous.error * 2, 1),
     screenSize: previous.screenSize / 2,
     distance: previous.distance * 2
   };
@@ -122,21 +125,18 @@ export function getLevels(settings: Settings): LevelSettings[] {
 function createLevel(error: number, screenSize: number, distance: number): LevelSettings {
   return {
     ratio: 0,
-    limitError: true,
     error,
     sloppy: false,
     updateVertices: false,
-    maxInfluences: 0,
-    interpolateFrames: true,
     lockBorder: false,
     sparse: false,
     prune: true,
-    regularize: false,
+    regularize: error >= farLevelError,
     regularizeLight: false,
-    permissive: false,
+    permissive: error >= farLevelError,
     preserveFolds: false,
     screenSize,
     distance,
-    hysteresis: 0
+    hysteresis: defaultHysteresis
   };
 }

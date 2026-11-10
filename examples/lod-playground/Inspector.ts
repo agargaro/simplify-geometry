@@ -1,7 +1,7 @@
 import { createChoice, createElement, createFlag, createNumberField, createSection, createToggle } from './Controls.js';
 import { levelColors } from './LODPreview.js';
 import type { Model } from './Models.js';
-import { getLevels, instancesRange, simplifyFlags, spreadRange, type LevelSettings, type Settings, type ThresholdMode, type VerticesMode } from './Settings.js';
+import { fovRange, getLevels, instancesRange, simplifyFlags, spreadRange, type LevelSettings, type Settings, type ThresholdMode, type VerticesMode } from './Settings.js';
 import { canUpdateVertices, getTriangles, getVertices } from './Simplification.js';
 import type { ViewState } from './State.js';
 import { descriptions, flagDescriptions } from './Tooltips.js';
@@ -42,8 +42,8 @@ export class Inspector {
     if (selected === 0) this.renderSource(model);
     else this.renderLevel(levels[selected - 1], selected);
 
+    this.renderSwitch(this.container);
     this.renderShared();
-    this.renderSwitch(this.globalContainer);
     this.renderScene(this.globalContainer);
     this.container.scrollTop = scrollTop;
     this.globalContainer.scrollTop = globalScrollTop;
@@ -92,14 +92,8 @@ export class Inspector {
         this.onChange();
       }
     });
-    createToggle(body, {
-      label: 'Limit error', tooltip: descriptions.limitError, checked: level.limitError, onInput: (checked) => {
-        level.limitError = checked;
-        this.rerender();
-      }
-    });
     createNumberField(body, {
-      label: 'Error', tooltip: descriptions.error, value: level.error, min: 0, max: 0.5, step: 0.0005, disabled: !level.limitError, onInput: (value) => {
+      label: 'Error', tooltip: descriptions.error, value: level.error, min: 0, max: 1, step: 0.0005, onInput: (value) => {
         level.error = value;
         this.onChange();
       }
@@ -117,34 +111,9 @@ export class Inspector {
       }
     });
 
-    const skin = this.model?.skin ?? null;
-
-    if (skin !== null) {
-      const options = [{ value: 0, label: 'Auto' }];
-
-      for (let count = 1; count <= skin.influences; count++) options.push({ value: count, label: String(count) });
-
-      createChoice<number>(body, {
-        label: 'Bone influences',
-        tooltip: descriptions.maxInfluences,
-        value: Math.min(level.maxInfluences, skin.influences),
-        options,
-        onInput: (value) => {
-          level.maxInfluences = value;
-          this.onChange();
-        }
-      });
-      createToggle(body, {
-        label: 'Interpolate frames', tooltip: descriptions.interpolateFrames, checked: level.interpolateFrames, onInput: (checked) => {
-          level.interpolateFrames = checked;
-          this.onChange();
-        }
-      });
-    }
-
     if (settings.thresholdMode === 'screenSize') {
       createNumberField(body, {
-        label: 'Screen size', tooltip: descriptions.screenSize, value: level.screenSize, min: 0.001, max: 1, step: 0.001, onInput: (value) => {
+        label: 'Screen size', tooltip: descriptions.screenSize, value: level.screenSize, min: 0.001, max: 4, step: 0.001, onInput: (value) => {
           level.screenSize = value;
           this.onChange();
         }
@@ -185,16 +154,16 @@ export class Inspector {
   }
 
   private renderSwitch(parent: HTMLElement): void {
-    const body = createSection(parent, 'Switch');
+    const body = createSection(parent, 'Level switching', descriptions.thresholdMode);
     const settings = this.settings;
 
     createChoice<ThresholdMode>(body, {
       tooltip: descriptions.thresholdMode,
       value: settings.thresholdMode,
       options: [
-        { value: 'pixelError', label: 'Pixel error' },
-        { value: 'screenSize', label: 'Screen size' },
-        { value: 'distance', label: 'Distance' }
+        { value: 'pixelError', label: 'Auto', tooltip: descriptions.modePixelError },
+        { value: 'screenSize', label: 'Manual · screen space', tooltip: descriptions.modeScreenSize },
+        { value: 'distance', label: 'Manual · distance', tooltip: descriptions.modeDistance }
       ],
       onInput: (value) => {
         settings.thresholdMode = value;
@@ -202,27 +171,18 @@ export class Inspector {
       }
     });
 
-    if (settings.thresholdMode === 'pixelError') {
-      createNumberField(body, {
-        label: 'Max error (px)', tooltip: descriptions.pixelError, value: settings.pixelError, min: 0.1, max: 16, step: 0.1, onInput: (value) => {
-          settings.pixelError = value;
-          this.onChange();
-        }
-      });
-    }
-
-    if (this.model?.skin == null) return;
+    if (settings.thresholdMode !== 'pixelError') return;
 
     createNumberField(body, {
-      label: 'Skin error (px)', tooltip: descriptions.skinError, value: settings.skinError, min: 0, max: 8, step: 0.1, onInput: (value) => {
-        settings.skinError = value;
+      label: 'Max error (px)', tooltip: descriptions.pixelError, value: settings.pixelError, min: 0.1, max: 16, step: 0.1, onInput: (value) => {
+        settings.pixelError = value;
         this.onChange();
       }
     });
   }
 
   private renderShared(): void {
-    const body = createSection(this.container, 'All levels');
+    const body = createSection(this.container, 'Simplification (all levels)');
     const settings = this.settings;
 
     createChoice<VerticesMode>(body, {
@@ -260,7 +220,7 @@ export class Inspector {
   }
 
   private renderScene(parent: HTMLElement): void {
-    const body = createSection(parent, 'Scene');
+    const body = createSection(parent, 'Preview scene');
     const settings = this.settings;
 
     createNumberField(body, {
@@ -275,8 +235,14 @@ export class Inspector {
         this.onChange();
       }
     });
+    createNumberField(body, {
+      label: 'FOV (°)', tooltip: descriptions.fov, value: settings.fov, min: fovRange[0], max: fovRange[1], step: 1, onInput: (value) => {
+        settings.fov = value;
+        this.onChange();
+      }
+    });
     createToggle(body, {
-      label: 'Environment', tooltip: descriptions.environment, checked: settings.environment, onInput: (checked) => {
+      label: 'Environment map', tooltip: descriptions.environment, checked: settings.environment, onInput: (checked) => {
         settings.environment = checked;
         this.onChange();
       }

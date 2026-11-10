@@ -76,3 +76,32 @@ Proposal: a per-level `vertices: 'compact'` in `SimplifyGeometryLevelParams`, va
 - Measured with the default playground levels (errors 0.005, 0.01, 0.02, 0.04), compact uses 1.3 to 2.6 times the memory of reordered: Imp 1.45 MB against 0.77 MB, Puglin 0.49 MB against 0.31 MB, Horse 0.49 MB against 0.19 MB because it copies the morph targets into every level.
 - With error-limited levels, `updateVertices` did not change the triangle count or the returned error on these models, so the gain is visual only and must be verified before changing the API.
 - A compact level cannot be drawn by a `BatchedMesh` that expects one shared vertex buffer.
+
+# LOD playground
+
+Features removed from the playground until they are reliable. Each one needs an analysis and approval before it comes back.
+
+## Bone influences per level
+
+Skinned levels can draw fewer bone influences per vertex with `reduceSkinInfluences` of `@three.ez/instanced-mesh`, which is cheaper to skin. The playground had two controls for it:
+
+- **Skin error (px)**: the largest displacement allowed, in pixels at the screen size where a level starts, measured over every baked frame. The tolerance passed to `reduceSkinInfluences` is `2 · skinError · radius / (extent · screenSize · viewportHeight)`, because one pixel there is `2 · radius / (screenSize · viewportHeight)` model units and the function measures its error as a fraction of the largest bounding box extent.
+- **Bone influences**: a fixed count per level (1–4) instead of the one chosen by the skin error.
+
+What was learned:
+
+- `reduceSkinInfluences` measures every vertex of the geometry. With `vertices: 'reordered'` or `'shared'` every level has the whole vertex buffer, so a far level was judged on vertices it does not draw (fingers, small parts): its errors were the same as level 1 and it never dropped below 3 influences. Measuring only the vertices referenced by the index fixed it: on Imp with 1 px, the last level went from 3 to 2 influences, and from 1.3 s to 0.3 s of reduction.
+- The same function writes `skinIndex` and `skinWeight` for every vertex: with a shared buffer each reduced level copies them for all vertices (+263 KB per level on Imp, more than compact vertices cost).
+- The criterion is strict: every vertex within the tolerance in every frame, at the level start, where the instance is largest. Puglin keeps 4 influences at 1 px because 3 influences move a vertex 1.01 px.
+- The reduction takes 0.3–1.3 s on the main thread: it must run in a worker, or the page freezes and the camera jumps when the input events queued during the freeze are applied.
+
+Proposal:
+
+- In `@three.ez/instanced-mesh`, let `reduceSkinInfluences` consider and write only the vertices referenced by the index, so that levels sharing a vertex buffer get the right error and the right memory.
+- Then bring both controls back, with the reduction in a worker and the generated code using the same function.
+
+## Frame interpolation per level
+
+InstancedMesh2 can blend the two nearest baked frames (`interpolateFrames: true`) or read only the nearest one, per LOD level (`addLOD(..., { interpolateFrames })`). Reading one frame halves the frame reads of far levels, where the steps between frames are rarely visible.
+
+Proposal: bring back the per-level toggle once there is a way to show its effect, for example the frame reads saved per frame, or a slow motion preview where the steps are visible.

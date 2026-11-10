@@ -1,5 +1,5 @@
 import type { Model } from './Models.js';
-import type { DrawLevels, GeometryLOD } from './Simplification.js';
+import type { GeometryLOD } from './Simplification.js';
 import type { FieldLayout } from './Thresholds.js';
 import type { Warning } from './Warnings.js';
 
@@ -21,7 +21,6 @@ export const randomClip = -1;
 export interface Snapshot {
   model: Model;
   lod: GeometryLOD;
-  draw: DrawLevels;
   thresholds: number[];
   used: boolean[];
   field: FieldLayout;

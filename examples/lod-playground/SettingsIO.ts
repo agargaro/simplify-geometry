@@ -1,10 +1,9 @@
-import { builtInModelNames, createDefaultSettings, createModelSettings, instancesRange, maxLevels, modelNames, spreadRange, type LevelSettings, type ModelSettings, type Settings } from './Settings.js';
+import { createDefaultSettings, createModelSettings, fovRange, instancesRange, maxLevels, modelNames, spreadRange, type LevelSettings, type ModelSettings, type Settings } from './Settings.js';
 
 type Values = Record<string, unknown>;
 
 const fileVersion = 2;
 const storageKey = 'lod-playground-settings';
-const maxInfluences = 4;
 
 const enumValues: Partial<Record<keyof Settings, readonly string[]>> = {
   model: modelNames,
@@ -16,19 +15,9 @@ const enumValues: Partial<Record<keyof Settings, readonly string[]>> = {
 };
 
 /**
- * Reads the settings of a shared link and removes them from the address bar, or else the settings saved in this browser.
+ * Reads the settings saved in this browser, or the defaults.
  */
 export function readInitialSettings(): Settings {
-  const hash = window.location.hash.slice(1);
-
-  if (hash !== '') {
-    window.history.replaceState(null, '', window.location.pathname + window.location.search);
-
-    const linked = parseSettings(() => decodeURIComponent(hash));
-
-    if (linked !== null) return linked;
-  }
-
   return parseSettings(() => localStorage.getItem(storageKey)) ?? createDefaultSettings();
 }
 
@@ -41,18 +30,6 @@ export function saveSettings(settings: Settings): void {
   } catch {
     return;
   }
-}
-
-/**
- * Returns a link to this page that holds only the settings that differ from the defaults.
- */
-export function createShareLink(settings: Settings): string {
-  const url = new URL(window.location.href);
-  const values = getChangedValues(settings);
-
-  url.hash = Object.keys(values).length === 0 ? '' : encodeURIComponent(JSON.stringify(values));
-
-  return url.href;
 }
 
 export function exportSettings(settings: Settings): string {
@@ -91,44 +68,6 @@ function parseSettings(read: () => string | null): Settings | null {
   }
 }
 
-function getChangedValues(settings: Settings): Values {
-  const defaults = createDefaultSettings();
-  const current = settings as unknown as Values;
-  const reference = defaults as unknown as Values;
-  const values: Values = {};
-  const models: Values = {};
-
-  for (const key of Object.keys(current)) {
-    if (key === 'models' || (key === 'model' && settings.model === 'custom')) continue;
-    if (current[key] !== reference[key]) values[key] = current[key];
-  }
-
-  for (const name of builtInModelNames) {
-    const levels = settings.models[name].levels;
-    const defaultLevels = defaults.models[name].levels;
-
-    if (JSON.stringify(levels) === JSON.stringify(defaultLevels)) continue;
-
-    models[name] = { levels: levels.map((level, i) => getChangedLevelValues(level, defaultLevels[Math.min(i, defaultLevels.length - 1)])) };
-  }
-
-  if (Object.keys(models).length > 0) values['models'] = models;
-
-  return values;
-}
-
-function getChangedLevelValues(level: LevelSettings, reference: LevelSettings): Values {
-  const current = level as unknown as Values;
-  const defaults = reference as unknown as Values;
-  const values: Values = {};
-
-  for (const key of Object.keys(current)) {
-    if (current[key] !== defaults[key]) values[key] = current[key];
-  }
-
-  return values;
-}
-
 function createSettings(values: Values): Settings {
   const settings = createDefaultSettings();
   const target = settings as unknown as Values;
@@ -151,6 +90,7 @@ function createSettings(values: Values): Settings {
 
   settings.instances = clamp(Math.round(settings.instances), instancesRange);
   settings.spread = clamp(settings.spread, spreadRange);
+  settings.fov = clamp(settings.fov, fovRange);
 
   return settings;
 }
@@ -193,7 +133,6 @@ function mergeLevel(level: LevelSettings, values: Values): void {
   }
 
   level.hysteresis = Math.min(level.hysteresis, 0.95);
-  level.maxInfluences = Math.min(Math.round(level.maxInfluences), maxInfluences);
 }
 
 function clamp(value: number, range: [number, number]): number {

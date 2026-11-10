@@ -17,7 +17,6 @@ export function getSettingsWarnings(settings: Settings, model: Model): Warning[]
     const number = i + 1;
     const ignored = getIgnoredBySloppy(level);
 
-    if (!level.limitError && level.ratio === 0) warnings.push({ level: number, text: 'Set a ratio or enable the error limit.' });
     if (level.updateVertices && !canUpdateVertices(level, settings)) warnings.push({ level: number, text: 'Update vertices needs compact vertices and no sloppy: it is ignored.' });
     if (level.sloppy && ignored.length > 0) warnings.push({ level: number, text: `Sloppy ignores ${ignored.join(', ')}.` });
     if (level.sloppy) continue;

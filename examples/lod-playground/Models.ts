@@ -278,7 +278,7 @@ function createSkinData(gltf: GLTF, mesh: SkinnedMesh, geometry: BufferGeometry,
   }
 
   if (clipNames.length === 0) {
-    notes.push('The skinned mesh has no clip to bake: it is shown in its bind pose and its bone influences are not reduced.');
+    notes.push('The skinned mesh has no clip to bake: it is shown in its bind pose.');
 
     return null;
   }

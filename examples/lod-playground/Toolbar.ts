@@ -1,12 +1,14 @@
-import { copyText } from './BottomDock.js';
 import { createChoice, createElement, selectChoice } from './Controls.js';
 import { icon, type IconName } from './Icons.js';
 import { getDrawnShading } from './LODPreview.js';
 import { isShadingAvailable, type Model } from './Models.js';
 import { modelLabels, modelNames, type ModelName, type PreviewLayout, type Settings, type ShadingMode } from './Settings.js';
-import { createShareLink, exportSettings } from './SettingsIO.js';
+import { exportSettings } from './SettingsIO.js';
 import { randomClip, type ViewState } from './State.js';
 import { descriptions } from './Tooltips.js';
+
+const repositoryUrl = 'https://github.com/agargaro/simplify-geometry';
+const packageUrl = 'https://www.npmjs.com/package/@three.ez/simplify-geometry';
 
 export interface ToolbarCallbacks {
   onModel: (name: ModelName) => void;
@@ -48,14 +50,14 @@ export class Toolbar {
     const transport = createElement('div', 'transport');
     const files = createElement('div', 'files');
     const history = createElement('div', 'history');
+    const links = createElement('div', 'links');
     const fileInput = createElement('input');
     const modelInput = createElement('input');
     const importButton = createToolButton('upload', 'Import', descriptions.import);
     const exportButton = createToolButton('download', 'Export', descriptions.export);
-    const linkButton = createToolButton('link', 'Copy link', descriptions.copyLink);
     const resetButton = createToolButton('reset', 'Reset', descriptions.resetSettings);
 
-    brand.innerHTML = `${icon('layers')}<span>simplify-geometry</span><b>LOD</b>`;
+    brand.innerHTML = `${icon('layers')}<span>@three.ez/simplify-geometry</span>`;
     modelInput.type = 'file';
     modelInput.accept = '.glb,model/gltf-binary';
     modelInput.hidden = true;
@@ -93,13 +95,13 @@ export class Toolbar {
     exportButton.addEventListener('click', () => {
       downloadText(exportSettings(settings), 'lod-playground.json');
     });
-    linkButton.addEventListener('click', () => void copyText(createShareLink(settings), linkButton));
     resetButton.addEventListener('click', callbacks.onReset);
-    files.append(resetButton, importButton, exportButton, linkButton, fileInput);
+    files.append(resetButton, importButton, exportButton, fileInput);
+    links.append(createLink('github', 'GitHub', repositoryUrl, descriptions.github), createLink('npm', 'npm', packageUrl, descriptions.npm, true));
     this.undoButton.addEventListener('click', callbacks.onUndo);
     this.redoButton.addEventListener('click', callbacks.onRedo);
     history.append(this.undoButton, this.redoButton);
-    root.prepend(brand);
+    root.prepend(brand, links);
     root.append(history, transport, createElement('span', 'spacer'), files);
     this.setPlaying(view.playing);
   }
@@ -193,7 +195,7 @@ export class ViewportBar {
     this.layout = createChoice<PreviewLayout>(root, {
       tooltip: descriptions.layout,
       value: settings.layout,
-      options: [{ value: 'distance', label: 'Distance' }, { value: 'levels', label: 'Side by side' }],
+      options: [{ value: 'distance', label: 'Crowd' }, { value: 'levels', label: 'Side by side' }],
       onInput: (value) => {
         settings.layout = value;
         callbacks.onChange();
@@ -302,6 +304,22 @@ function createToolButton(name: IconName, label: string, tooltip: string): HTMLB
   button.dataset['tooltip'] = tooltip;
 
   return button;
+}
+
+/**
+ * Returns a toolbar link that opens `href` in a new tab.
+ */
+function createLink(name: IconName, label: string, href: string, tooltip: string, iconOnly = false): HTMLAnchorElement {
+  const link = createElement('a', 'tool-button');
+
+  link.href = href;
+  link.target = '_blank';
+  link.rel = 'noopener';
+  link.innerHTML = iconOnly ? icon(name) : `${icon(name)}<span>${label}</span>`;
+  link.setAttribute('aria-label', label);
+  link.dataset['tooltip'] = tooltip;
+
+  return link;
 }
 
 function createIconButton(name: IconName, label: string, tooltip: string): HTMLButtonElement {

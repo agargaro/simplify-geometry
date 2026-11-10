@@ -194,6 +194,7 @@
 
     .transport,
     .history,
+    .links,
     .files,
     .toggles {
       display: flex;
@@ -319,6 +320,31 @@
       font-size: 11px;
     }
 
+    .level-nav {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      margin-left: auto;
+    }
+
+    .level-nav-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 30px;
+      justify-content: center;
+      color: var(--text);
+      font: 600 11px var(--mono);
+    }
+
+    .level-nav-label::before {
+      content: '';
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+      background: var(--level);
+    }
+
     .dock-actions {
       display: flex;
       gap: 2px;
@@ -398,8 +424,8 @@
     .level-row {
       position: relative;
       width: 100%;
-      row-gap: 5px;
-      padding: 9px 12px 9px 12px;
+      row-gap: 3px;
+      padding: 5px 12px;
       border: 0;
       border-bottom: 1px solid var(--line-soft);
       background: none;
@@ -479,10 +505,11 @@
       grid-column: 1 / -1;
       display: flex;
       flex-wrap: wrap;
-      gap: 2px 12px;
+      gap: 0 10px;
       color: var(--muted);
       font-family: var(--mono);
-      font-size: 11px;
+      font-size: 10.5px;
+      line-height: 1.45;
     }
 
     .level-meta .is-warn {
@@ -527,10 +554,97 @@
       background: var(--muted);
     }
 
-    .summary {
-      margin-top: 10px;
+    .build {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .build-button {
+      padding: 0 8px;
+      border-color: var(--line);
+      color: var(--text);
+    }
+
+    .build-button:disabled {
+      opacity: 0.5;
+    }
+
+    .build-time {
+      color: var(--muted);
+      font: 11px var(--mono);
+    }
+
+    .memory {
+      height: 100%;
+      overflow: auto;
+      padding: 6px 12px 10px;
+    }
+
+    .memory-table {
+      width: 100%;
+      border-collapse: collapse;
+      font: 11px var(--mono);
+    }
+
+    .memory-table th,
+    .memory-table td {
+      padding: 2px 8px;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .memory-table th:first-child {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding-left: 0;
+      text-align: left;
+    }
+
+    .memory-table thead th {
+      color: var(--faint);
+      font-weight: 400;
+    }
+
+    .memory-table tbody td {
+      color: var(--text);
+    }
+
+    .memory-table tfoot th,
+    .memory-table tfoot td {
+      border-top: 1px solid var(--line-soft);
+      color: var(--muted);
+    }
+
+    .memory-note {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .credits {
+      margin-top: 6px;
       color: var(--faint);
       font-size: 11px;
+    }
+
+    .credits a {
+      color: var(--muted);
+    }
+
+    .credits a:hover {
+      color: var(--text);
+    }
+
+    .links {
+      padding-right: 8px;
+      border-right: 1px solid var(--line);
+    }
+
+    a.tool-button {
+      text-decoration: none;
     }
 
 
@@ -1162,6 +1276,12 @@
       line-height: 1.45;
       pointer-events: none;
       box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+    }
+
+    @media (max-width: 1180px) {
+      .files .tool-button span {
+        display: none;
+      }
     }
 
     @media (prefers-reduced-motion: reduce) {

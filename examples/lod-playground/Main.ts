@@ -4,17 +4,18 @@ import { AmbientLight, type BufferGeometry, Color, DirectionalLight, Perspective
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { BottomDock } from './BottomDock.js';
+import { formatTime } from './Format.js';
 import { History } from './History.js';
 import { Inspector } from './Inspector.js';
+import { LevelNav } from './LevelNav.js';
 import { LevelsPanel } from './LevelsPanel.js';
 import { LODPreview } from './LODPreview.js';
 import { disposeModel, initModelLoaders, loadModel, loadModelFile, type Model } from './Models.js';
-import { createDefaultSettings, createModelSettings, createNextLevel, getLevels, maxLevels, modelLabels, type LevelSettings, type ModelName, type Settings } from './Settings.js';
+import { createDefaultSettings, createModelSettings, createNextLevel, getLevels, maxLevels, modelLabels, type LevelSettings, type ModelName, type Settings, type ThresholdMode } from './Settings.js';
 import { importSettings, readInitialSettings, saveSettings } from './SettingsIO.js';
-import { disposeLOD, reduceSkin, simplifyGeometry, type DrawLevels, type GeometryLOD } from './Simplification.js';
-import { SkinReducer } from './SkinReducer.js';
+import { disposeLOD, simplifyGeometry, type GeometryLOD } from './Simplification.js';
 import { randomClip, type Snapshot, type ViewState } from './State.js';
-import { getFieldLayout, getSwitchScreenSize, getThresholds, getUsedLevels } from './Thresholds.js';
+import { getFieldLayout, getSwitchDistance, getSwitchScreenSize, getThresholds, getUsedLevels } from './Thresholds.js';
 import { Toolbar, ViewportBar } from './Toolbar.js';
 import { initTooltips } from './Tooltips.js';
 import { getResultWarnings, getSettingsWarnings } from './Warnings.js';
@@ -23,13 +24,6 @@ interface LODCache {
   key: string;
   model: Model;
   lod: GeometryLOD;
-  reducer: SkinReducer | null;
-}
-
-interface DrawCache {
-  key: string;
-  lod: GeometryLOD;
-  draw: DrawLevels;
 }
 
 const updateDelay = 60;
@@ -61,7 +55,7 @@ const models = new Map<ModelName, Model>();
 
 const renderer = new WebGLRenderer({ antialias: true });
 const scene = new Scene();
-const camera = new PerspectiveCamera(50, 1, 0.1, 5000);
+const camera = new PerspectiveCamera(settings.fov, 1, 0.1, 5000);
 const controls = new MapControls(camera, renderer.domElement);
 const light = new DirectionalLight('white', 2.2);
 const preview = new LODPreview(scene);
@@ -76,22 +70,27 @@ light.position.set(0.4, 1, 0.6);
 camera.add(light, light.target);
 controls.maxPolarAngle = Math.PI / 2 - 0.02;
 controls.screenSpacePanning = false;
+controls.zoomToCursor = true;
+controls.zoomSpeed = 0.5;
+controls.panSpeed = 0.5;
+controls.rotateSpeed = 0.6;
 controls.addEventListener('change', requestRender);
 
 const toolbar = new Toolbar(getElement('toolbar'), settings, view, { onModel: (name) => void selectModel(name), onOpenFile: (file) => void openModelFile(file), onPlay: togglePlay, onClip: selectClip, onImport, onUndo: undo, onRedo: redo, onReset });
 const viewportBar = new ViewportBar(getElement('viewport-bar'), settings, view, { onChange: scheduleUpdate, onHighlight: updateHighlight, onResetCamera: resetCamera });
-const levelsPanel = new LevelsPanel(getElement('levels-dock'), settings, view, { onSelect: selectLevel, onHover: hoverLevel, onAdd: addLevel, onRemove: removeLevel });
+const levelsPanel = new LevelsPanel(getElement('levels-dock'), settings, view, { onSelect: selectLevel, onHover: hoverLevel, onAdd: addLevel, onRemove: removeLevel, onMeasure: () => void measureBuildTime() });
 const dock = new BottomDock(getElement('bottom-dock'), settings, view, { onSelect: selectLevel, onHover: hoverLevel, onLanguage });
 const inspector = new Inspector(getElement('inspector'), levelsPanel.settingsContainer, settings, view, scheduleUpdate);
+const levelNav = new LevelNav(document.querySelector<HTMLElement>('.inspector .dock-header')!, selectLevel);
 
 preview.onStats = (stats) => {
   levelsPanel.renderStats(stats);
 };
 
 let lodCache: LODCache | null = null;
-let drawCache: DrawCache | null = null;
 let snapshot: Snapshot | null = null;
 let buildKey = '';
+let snapshotMode: ThresholdMode = settings.thresholdMode;
 let builtGeometries: BufferGeometry[] = [];
 let cameraKey = '';
 let updateTimeout = 0;
@@ -268,8 +267,10 @@ function update(): void {
 
   if (model === undefined) return;
 
+  prefillManualSwitches(model);
   saveSettings(settings);
   recordHistory();
+  applyFov();
 
   try {
     snapshot = createSnapshot(model);
@@ -289,6 +290,7 @@ function update(): void {
   levelsPanel.render(snapshot);
   dock.render(snapshot);
   viewportBar.setLevelsCount(count);
+  levelNav.update(view.selectedLevel, count);
   requestRender();
 }
 
@@ -297,11 +299,9 @@ function createSnapshot(model: Model): Snapshot {
   const lod = getLOD(model, levels);
   const thresholds = getThresholds(lod, levels, settings, viewportHeight);
   const used = getUsedLevels(thresholds, settings);
-  const screenSizes = thresholds.map((threshold) => getSwitchScreenSize(threshold, lod.radius, settings, camera.fov));
-  const draw = getDrawLevels(model, lodCache!, screenSizes);
   const warnings = [...getSettingsWarnings(settings, model), ...getResultWarnings(lod, used, settings)];
 
-  return { model, lod, draw, thresholds, used, field: getFieldLayout(lod, settings, camera.fov), fov: camera.fov, warnings };
+  return { model, lod, thresholds, used, field: getFieldLayout(lod, settings, camera.fov), fov: camera.fov, warnings };
 }
 
 /**
@@ -310,7 +310,7 @@ function createSnapshot(model: Model): Snapshot {
 function getLOD(model: Model, levels: LevelSettings[]): GeometryLOD {
   const key = JSON.stringify([
     model.id, settings.vertices, settings.errorAbsolute, settings.protectNormalSeams, settings.protectUvSeams,
-    levels.map((level) => ({ ...level, maxInfluences: 0, interpolateFrames: true, screenSize: 0, distance: 0, hysteresis: 0 }))
+    levels.map((level) => ({ ...level, screenSize: 0, distance: 0, hysteresis: 0 }))
   ]);
 
   if (lodCache?.key === key) return lodCache.lod;
@@ -318,43 +318,23 @@ function getLOD(model: Model, levels: LevelSettings[]): GeometryLOD {
   const lod = simplifyGeometry(model.geometry, levels, settings);
   const previous = lodCache;
 
-  const reducer = model.skin === null ? null : new SkinReducer(lod.levels.map((level) => level.geometry), model.skin);
+  lodCache = { key, model, lod };
 
-  lodCache = { key, model, lod, reducer };
-
-  if (previous !== null) {
-    previous.reducer?.dispose();
-    disposeLOD(previous.lod, previous.model.geometry);
-  }
+  if (previous !== null) disposeLOD(previous.lod, previous.model.geometry);
 
   return lod;
 }
 
-/**
- * Returns the geometries drawn for each level, reducing the skin influences again only when the levels or their switch points change.
- */
-function getDrawLevels(model: Model, cache: LODCache, screenSizes: number[]): DrawLevels {
-  const key = model.skin === null ? '' : JSON.stringify([screenSizes, getLevels(settings).map((level) => level.maxInfluences), settings.skinError, viewportHeight]);
-
-  if (drawCache !== null && drawCache.lod === cache.lod && drawCache.key === key) return drawCache.draw;
-
-  const draw = reduceSkin(cache.lod, model.skin, cache.reducer, getLevels(settings), screenSizes, settings.skinError, viewportHeight);
-
-  drawCache = { key, lod: cache.lod, draw };
-
-  return draw;
-}
-
 function buildPreview(current: Snapshot): void {
   const levels = getLevels(settings);
-  const key = JSON.stringify([current.thresholds, current.used, levels.map((level) => [level.hysteresis, level.interpolateFrames]), settings.instances, settings.spread, settings.environment, settings.layout, settings.shading, view.forcedLevel]);
-  const geometries = current.draw.geometries;
+  const key = JSON.stringify([current.thresholds, current.used, levels.map((level) => level.hysteresis), settings.instances, settings.spread, settings.environment, settings.layout, settings.shading, view.forcedLevel]);
+  const geometries = current.lod.levels.map((level) => level.geometry);
   const isSameGeometries = geometries.length === builtGeometries.length && geometries.every((geometry, i) => geometry === builtGeometries[i]);
 
   builtGeometries = geometries;
 
   if (key !== buildKey || !isSameGeometries) {
-    preview.build({ ...current, geometries: current.draw.geometries, settings, forcedLevel: view.forcedLevel });
+    preview.build({ ...current, geometries, settings, forcedLevel: view.forcedLevel });
     preview.setClip(view.clip);
     buildKey = key;
   }
@@ -363,12 +343,48 @@ function buildPreview(current: Snapshot): void {
   preview.setFlatShading(settings.flatShading);
   preview.setHighlightedLevel(getHighlightedLevel());
 
-  const nextCameraKey = JSON.stringify([current.model.id, settings.layout, current.lod.levels.length, settings.instances, settings.spread]);
+  const nextCameraKey = JSON.stringify([current.model.id, settings.layout, current.lod.levels.length, settings.instances, settings.spread, settings.fov]);
 
   if (nextCameraKey === cameraKey) return;
 
   cameraKey = nextCameraKey;
   resetCamera();
+}
+
+/**
+ * When the switch mode changes, writes the switch points shown so far into the screen sizes and distances of the levels, so that a
+ * manual mode starts from where the levels already switched instead of from fixed placeholders.
+ */
+function prefillManualSwitches(model: Model): void {
+  const previousMode = snapshotMode;
+
+  snapshotMode = settings.thresholdMode;
+
+  if (snapshot === null || snapshot.model !== model || previousMode === settings.thresholdMode || settings.thresholdMode === 'pixelError') return;
+
+  const levels = getLevels(settings);
+  const previous = { ...settings, thresholdMode: previousMode };
+  const { thresholds, used, lod, fov } = snapshot;
+
+  for (let i = 0; i < thresholds.length && i < levels.length; i++) {
+    if (!used[i]) continue;
+
+    levels[i].screenSize = roundSwitch(getSwitchScreenSize(thresholds[i], lod.radius, previous, fov));
+    levels[i].distance = roundSwitch(getSwitchDistance(thresholds[i], lod.radius, previous, fov));
+  }
+
+  inspector.render(model);
+}
+
+function roundSwitch(value: number): number {
+  return Number(value.toPrecision(3));
+}
+
+function applyFov(): void {
+  if (camera.fov === settings.fov) return;
+
+  camera.fov = settings.fov;
+  camera.updateProjectionMatrix();
 }
 
 function resetCamera(): void {
@@ -389,7 +405,10 @@ function selectLevel(level: number): void {
   dock.select(level);
   updateHighlight();
 
-  if (snapshot !== null) inspector.render(snapshot.model);
+  if (snapshot === null) return;
+
+  levelNav.update(level, snapshot.lod.levels.length);
+  inspector.render(snapshot.model);
 }
 
 function hoverLevel(level: number): void {
@@ -454,8 +473,27 @@ function onLanguage(): void {
 }
 
 function recordHistory(): void {
-  history.record();
+  if (history.record()) levelsPanel.setBuildTime('');
+
   toolbar.setHistory(history.canUndo, history.canRedo);
+}
+
+/**
+ * Simplifies every level from scratch, without the cache of the preview, and shows the time.
+ */
+async function measureBuildTime(): Promise<void> {
+  const model = models.get(settings.model);
+
+  if (model === undefined) return;
+
+  levelsPanel.setBuildTime('Measuring…', true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const start = performance.now();
+  const lod = simplifyGeometry(model.geometry, getLevels(settings), settings);
+
+  levelsPanel.setBuildTime(formatTime(performance.now() - start));
+  disposeLOD(lod, model.geometry);
 }
 
 function undo(): void {

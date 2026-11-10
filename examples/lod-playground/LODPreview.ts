@@ -207,12 +207,11 @@ export class LODPreview {
 
     this.levelMap = [isForced ? forcedLevel : 0];
 
-    if (isForced) mesh.interpolateFrames = forcedLevel === 0 || levels[forcedLevel - 1].interpolateFrames;
-    else {
+    if (!isForced) {
       for (let i = 1; i < geometries.length; i++) {
         if (!used[i - 1]) continue;
 
-        mesh.addLOD(geometries[i], this.material, thresholds[i - 1], levels[i - 1].hysteresis, { interpolateFrames: levels[i - 1].interpolateFrames });
+        mesh.addLOD(geometries[i], this.material, thresholds[i - 1], levels[i - 1].hysteresis);
         this.levelMap.push(i);
       }
     }
@@ -231,8 +230,7 @@ export class LODPreview {
   }
 
   private buildLevelsLayout(input: PreviewInput): void {
-    const { lod, geometries, settings } = input;
-    const levels = settings.models[settings.model].levels;
+    const { lod, geometries } = input;
     const radius = lod.radius;
     const center = lod.levels[0].geometry.boundingSphere!.center;
     const spacing = radius * instanceSpacing;
@@ -244,7 +242,6 @@ export class LODPreview {
     for (let level = 0; level < count; level++) {
       const mesh = this.createMesh(geometries[level], 1, false);
 
-      mesh.interpolateFrames = level === 0 || levels[level - 1].interpolateFrames;
       mesh.addInstances(1, (instance) => {
         instance.position.set(getColumnX(level, count, spacing) - center.x, 0, -center.z);
       });

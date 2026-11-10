@@ -1,14 +1,15 @@
 import { generateCode, generateJson } from './CodeGenerator.js';
 import { createChoice, createElement, selectChoice } from './Controls.js';
-import { formatDistance } from './Format.js';
+import { formatCount, formatDistance, formatPercent } from './Format.js';
 import { icon } from './Icons.js';
 import { levelColors } from './LODPreview.js';
+import { formatBytes, getMemoryReport } from './Memory.js';
 import type { CodeLanguage, Settings } from './Settings.js';
 import type { Snapshot, ViewState } from './State.js';
 import { getSwitchDistance } from './Thresholds.js';
 import { descriptions } from './Tooltips.js';
 
-type DockTab = 'timeline' | 'code' | 'json' | 'warnings';
+type DockTab = 'timeline' | 'memory' | 'code' | 'json' | 'warnings';
 type CodeTab = 'code' | 'json';
 
 export interface BottomDockCallbacks {
@@ -24,8 +25,8 @@ interface Span {
 }
 
 const tabStorageKey = 'lod-playground-tab';
-const tabLabels: Record<DockTab, string> = { timeline: 'Distance', code: 'InstancedMesh2', json: 'JSON', warnings: 'Warnings' };
-const tabNames: DockTab[] = ['timeline', 'code', 'json', 'warnings'];
+const tabLabels: Record<DockTab, string> = { timeline: 'Level ranges', memory: 'Memory', code: 'InstancedMesh2', json: 'JSON', warnings: 'Warnings' };
+const tabNames: DockTab[] = ['timeline', 'memory', 'code', 'json', 'warnings'];
 const codeTabs: CodeTab[] = ['code', 'json'];
 const languages: CodeLanguage[] = ['ts', 'js'];
 const keywords = new Set(['import', 'from', 'export', 'function', 'const', 'let', 'return', 'for', 'if', 'continue', 'new', 'await', 'type', 'interface', 'true', 'false']);
@@ -46,6 +47,8 @@ export class BottomDock {
   private readonly codes = new Map<CodeTab, HTMLElement>();
   private readonly codeTexts = new Map<CodeTab, string>();
   private readonly warnings = createElement('ul', 'warning-list');
+  private readonly memory = createElement('div', 'memory');
+  private readonly memoryCaption = createElement('span', 'tool-caption');
   private language: HTMLElement | null = null;
   private spans: HTMLButtonElement[] = [];
   private active: DockTab = 'timeline';
@@ -86,7 +89,7 @@ export class BottomDock {
     }
 
     this.tabs.get('warnings')!.append(this.warningsCount);
-    bar.append(tabList, this.createTimelineTools(), this.createCodeTools('code', descriptions.codeTs), this.createCodeTools('json', descriptions.codeJson));
+    bar.append(tabList, this.createTimelineTools(), this.createMemoryTools(), this.createCodeTools('code', descriptions.codeTs), this.createCodeTools('json', descriptions.codeJson));
     timeline.append(this.track, this.ticks, this.axis);
     timeline.addEventListener('pointerleave', () => {
       callbacks.onHover(-1);
@@ -94,6 +97,7 @@ export class BottomDock {
     this.panels.get('timeline')!.append(timeline);
     for (const tab of codeTabs) this.panels.get(tab)!.append(this.createCodeBlock(tab));
 
+    this.panels.get('memory')!.append(this.memory);
     this.panels.get('warnings')!.append(this.warnings);
     root.append(bar, ...this.panels.values());
     this.setTab(readStoredTab());
@@ -101,6 +105,7 @@ export class BottomDock {
 
   render(snapshot: Snapshot): void {
     this.renderTimeline(snapshot);
+    this.renderMemory(snapshot);
     this.renderWarnings(snapshot);
     this.renderCode(snapshot);
   }
@@ -111,7 +116,7 @@ export class BottomDock {
 
   renderCode(snapshot: Snapshot): void {
     this.setCode('code', generateCode(this.settings, snapshot.model));
-    this.setCode('json', generateJson(this.settings, snapshot.model));
+    this.setCode('json', generateJson(this.settings));
   }
 
   /**
@@ -175,6 +180,44 @@ export class BottomDock {
     event.preventDefault();
     this.setTab(tabNames[next]);
     this.tabs.get(tabNames[next])!.focus();
+  }
+
+  private createMemoryTools(): HTMLElement {
+    const tools = createElement('div', 'tab-tools');
+
+    this.memoryCaption.textContent = descriptions.memory;
+    tools.append(this.memoryCaption);
+    this.tools.set('memory', tools);
+
+    return tools;
+  }
+
+  /**
+   * Lists the vertices and the index and vertex bytes drawn by each level, and the vertex copies made by compact vertices.
+   */
+  private renderMemory(snapshot: Snapshot): void {
+    const report = getMemoryReport(snapshot.lod.levels.map((level) => level.geometry));
+    const table = createElement('table', 'memory-table');
+    const rows = report.levels.map((level) => `<tr><th><i class="swatch" style="background:${levelColors[level.level % levelColors.length]}"></i>L${level.level}</th>`
+      + `<td>${formatCount(level.vertices)}</td><td>${formatCount(level.triangles)}</td><td>${level.indexType}</td>`
+      + `<td>${formatBytes(level.indexBytes)}</td><td>${level.vertexBytes === 0 ? 'shared' : formatBytes(level.vertexBytes)}</td></tr>`);
+    const total = report.indexBytes + report.vertexBytes;
+    const note = createElement('p', 'memory-note');
+
+    table.innerHTML = '<thead><tr><th>Level</th><th>Vertices</th><th>Triangles</th><th>Index</th><th>Index bytes</th><th>Vertex bytes</th></tr></thead>'
+      + `<tbody>${rows.join('')}</tbody>`
+      + `<tfoot><tr><th>Total</th><td></td><td></td><td></td><td>${formatBytes(report.indexBytes)}</td><td>${formatBytes(report.vertexBytes)}</td></tr></tfoot>`;
+    note.textContent = this.getMemoryNote(report.extraVertexBytes, report.vertexBytes - report.extraVertexBytes, total);
+    this.memory.replaceChildren(table, note);
+  }
+
+  private getMemoryNote(extraBytes: number, sharedBytes: number, total: number): string {
+    const totalText = `Total ${formatBytes(total)}.`;
+
+    if (extraBytes === 0) return `${totalText} Every level draws from the vertex buffer of level 0.`;
+
+    const share = formatPercent(extraBytes / sharedBytes);
+    return `${totalText} Compact vertices copy the vertices each level uses: +${formatBytes(extraBytes)} (+${share}) over one vertex buffer shared by every level.`;
   }
 
   private createTimelineTools(): HTMLElement {
@@ -379,7 +422,7 @@ function readStoredTab(): DockTab {
   try {
     const value = localStorage.getItem(tabStorageKey);
 
-    return value === 'code' || value === 'json' || value === 'warnings' ? value : 'timeline';
+    return value === 'memory' || value === 'code' || value === 'json' || value === 'warnings' ? value : 'timeline';
   } catch {
     return 'timeline';
   }
