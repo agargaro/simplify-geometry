@@ -197,7 +197,7 @@ export class LevelsPanel {
     const distance = formatDistance(getSwitchDistance(threshold, radius, this.settings, fov));
     const screenSize = formatPercent(getSwitchScreenSize(threshold, radius, this.settings, fov));
 
-    return `camera ≥ ${distance} units · screen space height ≤ ${screenSize}`;
+    return `camera ≥ ${distance} units · screen space ≤ ${screenSize}`;
   }
 }
 
