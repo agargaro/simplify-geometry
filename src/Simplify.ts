@@ -1,4 +1,4 @@
-import { MeshoptSimplifier, type SimplifierFlags } from 'meshoptimizer/simplifier';
+import * as Meshopt from './Meshopt.js';
 import { validatePositionArray, validateSimplifyArgs } from './Validation.js';
 
 export type IndexArray = Uint32Array | Uint16Array | Uint8Array;
@@ -20,7 +20,8 @@ export interface SimplifyParams {
   vertexLock?: Uint8Array;
   /**
    * Uses meshoptimizer `simplifySloppy`: faster and able to merge disconnected parts, but it ignores seams, borders and attributes,
-   * so the result has a larger error. Supports only `ratio`, `error`, `errorAbsolute`, `vertexLock` and `optimizeMemory`.
+   * so the result has a larger error. Supports only `ratio`, `error`, `errorAbsolute`, `vertexLock` and `optimizeMemory`:
+   * the other flags and the attributes are ignored.
    * @default false
    */
   sloppy?: boolean;
@@ -34,141 +35,55 @@ export interface SimplifyAttributes {
   weights: number[];
 }
 
-interface SimplifierOptions {
-  targetCount: number;
-  error: number;
-  vertexLock: Uint8Array | null;
-  flags: SimplifierFlags[];
-}
-
-const unlimitedError = 3.4028234663852886e38;
-const emptyAttributes: SimplifyAttributes = { array: new Float32Array(0), stride: 0, weights: [] };
-
-let isReady = false;
-
 export async function simplifyReady(): Promise<void> {
-  await MeshoptSimplifier.ready;
-  isReady = true;
+  await Meshopt.load();
 }
 
 export function simplify(srcIndexArray: IndexArray, srcPositionArray: Float32Array, params: SimplifyParams, srcAttributes?: SimplifyAttributes): SimplifyResult {
-  validateReady();
-  validateSimplifyArgs(srcIndexArray, srcPositionArray, params, srcAttributes);
+  Meshopt.validateReady();
+  validateSimplifyArgs(srcIndexArray, srcPositionArray, params);
 
-  const verticesCount = srcPositionArray.length / 3;
-  const [dstIndexArray, error] = simplifyIndexArray(toMeshoptIndexArray(srcIndexArray), srcPositionArray, params, srcAttributes);
+  const verticesCount = srcPositionArray.length / Meshopt.positionStride;
+  const srcBytesPerIndex = srcIndexArray.BYTES_PER_ELEMENT;
+  const indexArray = Meshopt.toUint32IndexArray(srcIndexArray);
+  const result = Meshopt.simplify(indexArray, srcPositionArray, params, srcAttributes);
+  const dstIndexArray = toResultIndexArray(result.indexArray, srcBytesPerIndex, verticesCount, params.optimizeMemory);
 
-  return [toIndexArray(dstIndexArray, srcIndexArray.BYTES_PER_ELEMENT, verticesCount, params.optimizeMemory), error];
+  return [dstIndexArray, result.error];
 }
 
 export function getScale(srcPositionArray: Float32Array): number {
-  validateReady();
+  Meshopt.validateReady();
   validatePositionArray(srcPositionArray);
 
-  return MeshoptSimplifier.getScale(srcPositionArray, 3);
+  return Meshopt.getScale(srcPositionArray);
 }
 
 /**
  * Maps every vertex to the first vertex with the same position. Vertices that share a position but not their attributes lie on a seam.
  */
 export function generatePositionRemap(srcPositionArray: Float32Array): Uint32Array {
-  validateReady();
+  Meshopt.validateReady();
   validatePositionArray(srcPositionArray);
 
-  return MeshoptSimplifier.generatePositionRemap(srcPositionArray, 3);
-}
-
-/** @internal */
-export function validateReady(): void {
-  if (!isReady) throw new Error('"simplifyReady()" must be awaited before using the simplifier.');
-}
-
-/**
- * Runs meshoptimizer on arguments that the caller has already validated.
- * @internal
- */
-export function simplifyIndexArray(indexArray: Uint32Array, positionArray: Float32Array, params: SimplifyParams, attributes?: SimplifyAttributes): [Uint32Array, number] {
-  const options = getSimplifierOptions(params, indexArray.length);
-  const { array, stride, weights } = attributes ?? emptyAttributes;
-
-  if (params.sloppy === true) return simplifySloppyIndexArray(indexArray, positionArray, params, options);
-
-  return MeshoptSimplifier.simplifyWithAttributes(
-    indexArray, positionArray, 3, array, stride, weights, options.vertexLock, options.targetCount, options.error, options.flags
-  );
-}
-
-/**
- * Like `simplifyIndexArray`, but also moves the remaining vertices: `indexArray`, `positionArray` and `attributes.array` are modified in place.
- * @internal
- */
-export function updateIndexArray(indexArray: Uint32Array, positionArray: Float32Array, params: SimplifyParams, attributes?: SimplifyAttributes): [Uint32Array, number] {
-  const { targetCount, error, vertexLock, flags } = getSimplifierOptions(params, indexArray.length);
-  const { array, stride, weights } = attributes ?? emptyAttributes;
-  const [indexCount, resultError] = MeshoptSimplifier.simplifyWithUpdate(
-    indexArray, positionArray, 3, array, stride, weights, vertexLock, targetCount, error, flags
-  );
-
-  return [indexArray.slice(0, indexCount), resultError];
-}
-
-/**
- * Uint8Array and Uint16Array indices are copied to a Uint32Array for meshoptimizer.
- * @internal
- */
-export function toMeshoptIndexArray(indexArray: IndexArray): Uint32Array {
-  if (indexArray.constructor === Uint32Array) return indexArray;
-
-  return new Uint32Array(indexArray);
+  return Meshopt.generatePositionRemap(srcPositionArray);
 }
 
 /**
  * The returned indices keep the source type, or a smaller one that fits the vertex count when `optimizeMemory` is enabled (default).
+ * The returned array always owns its whole buffer, so a view of a larger buffer is copied.
  * @internal
  */
-export function toIndexArray(indexArray: Uint32Array, srcBytesPerIndex: number, verticesCount: number, optimizeMemory?: boolean): IndexArray {
+export function toResultIndexArray(indexArray: Uint32Array, srcBytesPerIndex: number, verticesCount: number, optimizeMemory?: boolean): IndexArray {
   const smallestBytesPerIndex = getSmallestBytesPerIndex(verticesCount);
   const bytesPerIndex = optimizeMemory === false ? srcBytesPerIndex : Math.min(srcBytesPerIndex, smallestBytesPerIndex);
+  const isView = indexArray.byteLength !== indexArray.buffer.byteLength;
 
   if (bytesPerIndex === 1) return new Uint8Array(indexArray);
   if (bytesPerIndex === 2) return new Uint16Array(indexArray);
+  if (isView) return indexArray.slice();
 
   return indexArray;
-}
-
-function simplifySloppyIndexArray(indexArray: Uint32Array, positionArray: Float32Array, params: SimplifyParams, options: SimplifierOptions): [Uint32Array, number] {
-  const scale = params.errorAbsolute === true ? MeshoptSimplifier.getScale(positionArray, 3) : 1;
-  const error = Math.min(options.error / scale, unlimitedError);
-  const [dstIndexArray, resultError] = MeshoptSimplifier.simplifySloppy(
-    indexArray, positionArray, 3, options.vertexLock, options.targetCount, error
-  );
-
-  return [dstIndexArray, resultError * scale];
-}
-
-function getSimplifierOptions(params: SimplifyParams, indicesCount: number): SimplifierOptions {
-  return {
-    targetCount: 3 * Math.floor((params.ratio ?? 0) * (indicesCount / 3)),
-    error: params.error ?? unlimitedError,
-    vertexLock: params.vertexLock ?? null,
-    flags: getFlags(params)
-  };
-}
-
-function getFlags(params: SimplifyParams): SimplifierFlags[] {
-  const flags: SimplifierFlags[] = [];
-
-  if (params.lockBorder === true) flags.push('LockBorder');
-  if (params.sparse === true) flags.push('Sparse');
-  if (params.errorAbsolute === true) flags.push('ErrorAbsolute');
-  if (params.prune === true) flags.push('Prune');
-  if (params.regularize === true) flags.push('Regularize');
-  if (params.regularizeLight === true) flags.push('RegularizeLight');
-  if (params.permissive === true) flags.push('Permissive');
-  if (params.preserveFolds === true) flags.push('PreserveFolds');
-  if (params.errorClamped === true) flags.push('ErrorClamped');
-
-  return flags;
 }
 
 function getSmallestBytesPerIndex(verticesCount: number): number {

@@ -1,4 +1,5 @@
-import type { BufferAttribute, BufferGeometry, InstancedBufferAttribute, InterleavedBufferAttribute } from 'three';
+import type { BufferAttribute, BufferGeometry, InstancedBufferAttribute, InterleavedBufferAttribute, TypedArray } from 'three';
+import { protectedVertex } from './Meshopt.js';
 import type { IndexArray } from './Simplify.js';
 
 /** @internal */
@@ -7,17 +8,17 @@ export type GeometryAttribute = BufferAttribute | InterleavedBufferAttribute;
 /** @internal */
 export type MorphAttributes = Record<string, GeometryAttribute[]>;
 
-/**
- * Value of a remap entry for a vertex that is not used by the remapped indices.
- * @internal
- */
-export const unusedVertex = 0xffffffff;
-
-const protectedVertex = 2;
-
 /** @internal */
 export function isInterleavedAttribute(attribute: GeometryAttribute): attribute is InterleavedBufferAttribute {
   return (attribute as Partial<InterleavedBufferAttribute>).isInterleavedBufferAttribute === true;
+}
+
+/**
+ * Attributes renormalized after `updateVertices`: three.js uses these names for its normals and tangents.
+ * @internal
+ */
+export function isDirectionAttribute(name: string): boolean {
+  return name === 'normal' || name === 'tangent';
 }
 
 /** @internal */
@@ -34,11 +35,52 @@ export function isInstancedAttribute(attribute: GeometryAttribute): boolean {
 }
 
 /**
+ * Returns the distance between two consecutive items in `attribute.array`.
+ * @internal
+ */
+export function getItemStride(attribute: GeometryAttribute): number {
+  return isInterleavedAttribute(attribute) ? attribute.data.stride : attribute.itemSize;
+}
+
+/**
+ * Returns the position of the first item in `attribute.array`.
+ * @internal
+ */
+export function getItemOffset(attribute: GeometryAttribute): number {
+  return isInterleavedAttribute(attribute) ? attribute.offset : 0;
+}
+
+/**
+ * Returns the value that a normalized integer array maps to 1, or 1 for any other array.
+ * @internal
+ */
+export function getNormalizationScale(array: TypedArray): number {
+  const type = array.constructor;
+
+  if (type === Uint8Array || type === Uint8ClampedArray) return 255;
+  if (type === Int8Array) return 127;
+  if (type === Uint16Array) return 65535;
+  if (type === Int16Array) return 32767;
+  if (type === Uint32Array) return 4294967295;
+  if (type === Int32Array) return 2147483647;
+
+  return 1;
+}
+
+/**
  * Returns the index array of a geometry already checked by `validateGeometry`.
  * @internal
  */
 export function getIndexArray(geometry: BufferGeometry): IndexArray {
   return (geometry.index as BufferAttribute).array as IndexArray;
+}
+
+/**
+ * Returns the position array of a geometry already checked by `validateGeometry`.
+ * @internal
+ */
+export function getPositionArray(geometry: BufferGeometry): Float32Array {
+  return geometry.getAttribute('position').array as Float32Array;
 }
 
 /**
@@ -54,18 +96,23 @@ export function createSeamLock(geometry: BufferGeometry, names: string[], positi
     markSeamPositions(seamPositions, geometry.getAttribute(names[i]), positionRemap);
   }
 
-  for (let i = 0, l = positionRemap.length; i < l; i++) {
-    if (seamPositions[positionRemap[i]] === 1 && lock[i] === 0) lock[i] = protectedVertex;
-  }
+  protectSeamVertices(lock, seamPositions, positionRemap);
 
   return lock;
 }
 
+function protectSeamVertices(lock: Uint8Array, seamPositions: Uint8Array, positionRemap: Uint32Array): void {
+  for (let i = 0, l = positionRemap.length; i < l; i++) {
+    const isSeamVertex = seamPositions[positionRemap[i]] === 1;
+
+    if (isSeamVertex && lock[i] === 0) lock[i] = protectedVertex;
+  }
+}
+
 function markSeamPositions(seamPositions: Uint8Array, attribute: GeometryAttribute, positionRemap: Uint32Array): void {
-  const isInterleaved = isInterleavedAttribute(attribute);
   const array = attribute.array;
-  const stride = isInterleaved ? attribute.data.stride : attribute.itemSize;
-  const offset = isInterleaved ? attribute.offset : 0;
+  const stride = getItemStride(attribute);
+  const offset = getItemOffset(attribute);
   const itemSize = attribute.itemSize;
 
   for (let i = 0, l = positionRemap.length; i < l; i++) {

@@ -56,7 +56,8 @@ export default defineConfig([
     files: ['src/**/*.ts'],
     rules: {
       'no-restricted-syntax': ['error', ...runtimeSyntax],
-      'prefer-rest-params': 'error'
+      'prefer-rest-params': 'error',
+      '@stylistic/object-curly-newline': ['error', { ImportDeclaration: 'never' }]
     }
   }
 ]);

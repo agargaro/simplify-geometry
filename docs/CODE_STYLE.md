@@ -9,6 +9,7 @@ What ESLint cannot check about code in `src/`. Size and complexity limits are re
 - Errors are full sentences naming the parameter: `throw new RangeError('"ratio" must be between 0 and 1.')`.
 - Give a non-trivial condition a name with a local `const` before the `if`.
 - Never nest a call or a ternary inside an argument list when it makes the line hard to read: use intermediate locals.
+- A function signature stays on one line, whatever its length: never wrap the parameters. Long signatures are exempt from the `max-len` limit.
 
 ## Paragraphs
 
@@ -40,6 +41,7 @@ function countDegenerateTriangles(index: Uint32Array): number {
 ## Files
 
 - File order: imports, module-level constants, exported functions, module-level helpers.
+- An import stays on one line, whatever its length: never wrap the imported names. Long imports are exempt from the `max-len` limit.
 - Module-level mutable state is only for hot-path scratch values, and must stay correct under concurrent async calls.
 
 ## Hot paths

@@ -1,18 +1,10 @@
 import { BufferAttribute, type BufferGeometry } from 'three';
-import { createSeamLock, getIndexArray } from './GeometryAttributes.js';
+import { createSeamLock, getIndexArray, getPositionArray } from './GeometryAttributes.js';
+import * as Meshopt from './Meshopt.js';
 import { packAttributes, unpackAttributes, type AttributeWeights, type PackedAttributes } from './PackAttributes.js';
-import { compactGeometry, createSharedGeometry, reorderGeometry } from './RemapGeometry.js';
-import {
-  generatePositionRemap,
-  simplifyIndexArray,
-  toIndexArray,
-  toMeshoptIndexArray,
-  updateIndexArray,
-  validateReady,
-  type IndexArray,
-  type SimplifyParams
-} from './Simplify.js';
-import { validateGeometry, validateLevelParams, validateVertices } from './Validation.js';
+import { compactGeometry, createSharedGeometry, reorderGeometry, type ReorderedGeometry } from './RemapGeometry.js';
+import { toResultIndexArray, type IndexArray, type SimplifyParams } from './Simplify.js';
+import { validateGeometry, validateLevelParams } from './Validation.js';
 
 export interface SimplifyGeometryLevelParams extends SimplifyParams {
   attributes?: AttributeWeights;
@@ -27,7 +19,7 @@ export interface SimplifyGeometryLevelParams extends SimplifyParams {
   updateVertices?: boolean;
   /**
    * Names of the attributes whose seams are protected in `permissive` mode: vertices that share a position but have different values
-   * of these attributes are protected (2) in `vertexLock`, while the other seams can still collapse. Requires `permissive`.
+   * of these attributes are protected (2) in `vertexLock`, while the other seams can still collapse. Only effective with `permissive`.
    */
   protectSeams?: string[];
 }
@@ -45,46 +37,31 @@ export interface SimplifyGeometryResult {
   error: number;
 }
 
-interface SimplifiedLevel {
-  indexArray: Uint32Array;
-  error: number;
+interface SimplifiedLevel extends Meshopt.SimplifyOutput {
   positionArray?: Float32Array;
   attributes?: PackedAttributes | undefined;
 }
 
 type PackedAttributesCache = Map<AttributeWeights | undefined, PackedAttributes | undefined>;
 
-const geometryVertices = { compact: true, shared: true } satisfies Record<NonNullable<SimplifyGeometryParams['vertices']>, true>;
-const lodVertices = { compact: true, shared: true, reordered: true } satisfies Record<NonNullable<SimplifyGeometryLODParams['vertices']>, true>;
-
 export function simplifyGeometry(geometry: BufferGeometry, params: SimplifyGeometryParams): SimplifyGeometryResult {
-  validateReady();
-  validateGeometry(geometry);
-  validateVertices(params.vertices, geometryVertices);
-  validateLevelParams(geometry, params, params.vertices);
-
-  const levelParams = params.protectSeams === undefined ? params : withSeamLock(geometry, params, getPositionRemap(geometry));
-  const srcAttributes = packAttributes(geometry, params.attributes);
-  const level = simplifyLevel(geometry, toMeshoptIndexArray(getIndexArray(geometry)), levelParams, srcAttributes);
-
-  return { geometry: createLevel(geometry, level, params.vertices, params.optimizeMemory), error: level.error };
+  return simplifyGeometryLOD(geometry, [params], params)[1];
 }
 
 export function simplifyGeometryLOD(geometry: BufferGeometry, levels: SimplifyGeometryLevelParams[], params: SimplifyGeometryLODParams = {}): SimplifyGeometryResult[] {
-  validateReady();
+  Meshopt.validateReady();
   validateGeometry(geometry);
-  validateVertices(params.vertices, lodVertices);
 
-  const levelsParams = getLevelsParams(geometry, levels, params);
-  const levelsAttributes = packLevelsAttributes(geometry, levelsParams);
+  const paramsPerLevel = getParamsPerLevel(geometry, levels, params);
+  const attributesPerLevel = packAttributesPerLevel(geometry, paramsPerLevel);
 
-  if (params.vertices === 'reordered') return createReorderedLevels(geometry, levelsParams, levelsAttributes, params);
+  if (params.vertices === 'reordered') return createReorderedLevels(geometry, paramsPerLevel, attributesPerLevel, params);
 
-  return createLevels(geometry, levelsParams, levelsAttributes, params.vertices);
+  return createLevels(geometry, paramsPerLevel, attributesPerLevel, params.vertices);
 }
 
-function getLevelsParams(geometry: BufferGeometry, levels: SimplifyGeometryLevelParams[], params: SimplifyGeometryLODParams): SimplifyGeometryLevelParams[] {
-  const levelsParams = new Array<SimplifyGeometryLevelParams>(levels.length);
+function getParamsPerLevel(geometry: BufferGeometry, levels: SimplifyGeometryLevelParams[], params: SimplifyGeometryLODParams): SimplifyGeometryLevelParams[] {
+  const paramsPerLevel = new Array<SimplifyGeometryLevelParams>(levels.length);
   let positionRemap: Uint32Array | undefined;
 
   for (let i = 0, l = levels.length; i < l; i++) {
@@ -93,97 +70,94 @@ function getLevelsParams(geometry: BufferGeometry, levels: SimplifyGeometryLevel
     validateLevelParams(geometry, levelParams, params.vertices);
 
     if (levelParams.protectSeams === undefined) {
-      levelsParams[i] = levelParams;
+      paramsPerLevel[i] = levelParams;
       continue;
     }
 
-    positionRemap ??= getPositionRemap(geometry);
-    levelsParams[i] = withSeamLock(geometry, levelParams, positionRemap);
+    positionRemap ??= Meshopt.generatePositionRemap(getPositionArray(geometry));
+    paramsPerLevel[i] = withSeamLock(geometry, levelParams, positionRemap);
   }
 
-  return levelsParams;
-}
-
-function getPositionRemap(geometry: BufferGeometry): Uint32Array {
-  return generatePositionRemap(geometry.getAttribute('position').array as Float32Array);
+  return paramsPerLevel;
 }
 
 function withSeamLock<T extends SimplifyGeometryLevelParams>(geometry: BufferGeometry, params: T, positionRemap: Uint32Array): T {
-  return { ...params, vertexLock: createSeamLock(geometry, params.protectSeams ?? [], positionRemap, params.vertexLock) };
+  const vertexLock = createSeamLock(geometry, params.protectSeams ?? [], positionRemap, params.vertexLock);
+
+  return { ...params, vertexLock };
 }
 
-function packLevelsAttributes(geometry: BufferGeometry, levelsParams: SimplifyGeometryLevelParams[]): (PackedAttributes | undefined)[] {
-  const packedAttributes: PackedAttributesCache = new Map();
-  const levelsAttributes = new Array<PackedAttributes | undefined>(levelsParams.length);
+function packAttributesPerLevel(geometry: BufferGeometry, paramsPerLevel: SimplifyGeometryLevelParams[]): (PackedAttributes | undefined)[] {
+  const cache: PackedAttributesCache = new Map();
+  const attributesPerLevel = new Array<PackedAttributes | undefined>(paramsPerLevel.length);
 
-  for (let i = 0, l = levelsParams.length; i < l; i++) {
-    const attributeWeights = levelsParams[i].attributes;
+  for (let i = 0, l = paramsPerLevel.length; i < l; i++) {
+    const attributeWeights = paramsPerLevel[i].attributes;
 
-    if (!packedAttributes.has(attributeWeights)) packedAttributes.set(attributeWeights, packAttributes(geometry, attributeWeights));
+    if (!cache.has(attributeWeights)) cache.set(attributeWeights, packAttributes(geometry, attributeWeights));
 
-    levelsAttributes[i] = packedAttributes.get(attributeWeights);
+    attributesPerLevel[i] = cache.get(attributeWeights);
   }
 
-  return levelsAttributes;
+  return attributesPerLevel;
 }
 
-function createLevels(
-  geometry: BufferGeometry,
-  levelsParams: SimplifyGeometryLevelParams[],
-  levelsAttributes: (PackedAttributes | undefined)[],
-  vertices: SimplifyGeometryLODParams['vertices']
-): SimplifyGeometryResult[] {
-  const indexArray = toMeshoptIndexArray(getIndexArray(geometry));
-  const results = new Array<SimplifyGeometryResult>(levelsParams.length + 1);
+function createLevels(geometry: BufferGeometry, paramsPerLevel: SimplifyGeometryLevelParams[], attributesPerLevel: (PackedAttributes | undefined)[], vertices: SimplifyGeometryLODParams['vertices']): SimplifyGeometryResult[] {
+  const indexArray = getMeshoptIndexArray(geometry);
+  const results = new Array<SimplifyGeometryResult>(paramsPerLevel.length + 1);
 
   results[0] = { geometry, error: 0 };
 
-  for (let i = 0, l = levelsParams.length; i < l; i++) {
-    const level = simplifyLevel(geometry, indexArray, levelsParams[i], levelsAttributes[i]);
+  for (let i = 0, l = paramsPerLevel.length; i < l; i++) {
+    const levelParams = paramsPerLevel[i];
+    const level = simplifyLevel(geometry, indexArray, levelParams, attributesPerLevel[i]);
+    const levelGeometry = createLevel(geometry, level, vertices, levelParams.optimizeMemory);
 
-    results[i + 1] = { geometry: createLevel(geometry, level, vertices, levelsParams[i].optimizeMemory), error: level.error };
+    results[i + 1] = { geometry: levelGeometry, error: level.error };
   }
 
   return results;
 }
 
-function createReorderedLevels(
-  geometry: BufferGeometry,
-  levelsParams: SimplifyGeometryLevelParams[],
-  levelsAttributes: (PackedAttributes | undefined)[],
-  params: SimplifyGeometryLODParams
-): SimplifyGeometryResult[] {
+function createReorderedLevels(geometry: BufferGeometry, paramsPerLevel: SimplifyGeometryLevelParams[], attributesPerLevel: (PackedAttributes | undefined)[], params: SimplifyGeometryLODParams): SimplifyGeometryResult[] {
   const srcIndexArray = getIndexArray(geometry);
-  const levels = simplifyLevels(geometry, levelsParams, levelsAttributes);
-  const [vertexGeometry, indexArrays] = reorderGeometry(geometry, getLevelsIndexArrays(srcIndexArray, levels));
-  const verticesCount = vertexGeometry.getAttribute('position').count;
-  const results = new Array<SimplifyGeometryResult>(indexArrays.length);
+  const levels = simplifyLevels(geometry, paramsPerLevel, attributesPerLevel);
+  const levelsIndexArrays = getLevelsIndexArrays(srcIndexArray, levels);
+  const reordered = reorderGeometry(geometry, levelsIndexArrays);
 
-  for (let i = 0, l = indexArrays.length; i < l; i++) {
-    const isSourceLevel = i === 0;
-    const levelParams = isSourceLevel ? params : levelsParams[i - 1];
-    const dstGeometry = isSourceLevel ? vertexGeometry : createSharedGeometry(vertexGeometry);
+  return createReorderedResults(reordered, levels, paramsPerLevel, params, srcIndexArray.BYTES_PER_ELEMENT);
+}
 
-    setLevelIndex(dstGeometry, indexArrays[i], srcIndexArray.BYTES_PER_ELEMENT, verticesCount, levelParams.optimizeMemory);
-    results[i] = { geometry: dstGeometry, error: isSourceLevel ? 0 : levels[i - 1].error };
+function createReorderedResults(reordered: ReorderedGeometry, levels: SimplifiedLevel[], paramsPerLevel: SimplifyGeometryLevelParams[], params: SimplifyGeometryLODParams, srcBytesPerIndex: number): SimplifyGeometryResult[] {
+  const verticesCount = reordered.geometry.getAttribute('position').count;
+  const results = new Array<SimplifyGeometryResult>(levels.length + 1);
+
+  setLevelIndex(reordered.geometry, reordered.indexArrays[0], srcBytesPerIndex, verticesCount, params.optimizeMemory);
+  results[0] = { geometry: reordered.geometry, error: 0 };
+
+  for (let i = 0, l = levels.length; i < l; i++) {
+    const levelGeometry = createSharedGeometry(reordered.geometry);
+
+    setLevelIndex(levelGeometry, reordered.indexArrays[i + 1], srcBytesPerIndex, verticesCount, paramsPerLevel[i].optimizeMemory);
+    results[i + 1] = { geometry: levelGeometry, error: levels[i].error };
   }
 
   return results;
 }
 
-function simplifyLevels(
-  geometry: BufferGeometry,
-  levelsParams: SimplifyGeometryLevelParams[],
-  levelsAttributes: (PackedAttributes | undefined)[]
-): SimplifiedLevel[] {
-  const indexArray = toMeshoptIndexArray(getIndexArray(geometry));
-  const levels = new Array<SimplifiedLevel>(levelsParams.length);
+function simplifyLevels(geometry: BufferGeometry, paramsPerLevel: SimplifyGeometryLevelParams[], attributesPerLevel: (PackedAttributes | undefined)[]): SimplifiedLevel[] {
+  const indexArray = getMeshoptIndexArray(geometry);
+  const levels = new Array<SimplifiedLevel>(paramsPerLevel.length);
 
-  for (let i = 0, l = levelsParams.length; i < l; i++) {
-    levels[i] = simplifyLevel(geometry, indexArray, levelsParams[i], levelsAttributes[i]);
+  for (let i = 0, l = paramsPerLevel.length; i < l; i++) {
+    levels[i] = simplifyLevel(geometry, indexArray, paramsPerLevel[i], attributesPerLevel[i]);
   }
 
   return levels;
+}
+
+function getMeshoptIndexArray(geometry: BufferGeometry): Uint32Array {
+  return Meshopt.toUint32IndexArray(getIndexArray(geometry));
 }
 
 function getLevelsIndexArrays(srcIndexArray: IndexArray, levels: SimplifiedLevel[]): IndexArray[] {
@@ -199,37 +173,37 @@ function getLevelsIndexArrays(srcIndexArray: IndexArray, levels: SimplifiedLevel
 }
 
 function simplifyLevel(geometry: BufferGeometry, indexArray: Uint32Array, params: SimplifyGeometryLevelParams, attributes?: PackedAttributes): SimplifiedLevel {
-  const positionArray = geometry.getAttribute('position').array as Float32Array;
+  const positionArray = getPositionArray(geometry);
 
-  if (params.updateVertices === true) return simplifyUpdatedLevel(getIndexArray(geometry), positionArray, params, attributes);
+  if (params.updateVertices === true) return simplifyLevelWithUpdate(indexArray, positionArray, params, attributes);
 
-  const [dstIndexArray, error] = simplifyIndexArray(indexArray, positionArray, params, attributes);
-
-  return { indexArray: dstIndexArray, error };
+  return Meshopt.simplify(indexArray, positionArray, params, attributes);
 }
 
-function simplifyUpdatedLevel(srcIndexArray: IndexArray, positionArray: Float32Array, params: SimplifyParams, attributes?: PackedAttributes): SimplifiedLevel {
-  const dstPositionArray = positionArray.slice();
-  const dstAttributes = attributes === undefined ? undefined : { ...attributes, array: attributes.array.slice() };
-  const [dstIndexArray, error] = updateIndexArray(new Uint32Array(srcIndexArray), dstPositionArray, params, dstAttributes);
+function simplifyLevelWithUpdate(srcIndexArray: Uint32Array, srcPositionArray: Float32Array, params: SimplifyParams, srcAttributes?: PackedAttributes): SimplifiedLevel {
+  const positionArray = srcPositionArray.slice();
+  const attributes = srcAttributes === undefined ? undefined : { ...srcAttributes, array: srcAttributes.array.slice() };
+  const result = Meshopt.simplifyWithUpdate(srcIndexArray.slice(), positionArray, params, attributes);
 
-  return { indexArray: dstIndexArray, error, positionArray: dstPositionArray, attributes: dstAttributes };
+  return { indexArray: result.indexArray, error: result.error, positionArray, attributes };
 }
 
 function createLevel(geometry: BufferGeometry, level: SimplifiedLevel, vertices: SimplifyGeometryLODParams['vertices'], optimizeMemory?: boolean): BufferGeometry {
   const srcBytesPerIndex = getIndexArray(geometry).BYTES_PER_ELEMENT;
 
   if (vertices === 'shared') {
+    const sharedGeometry = createSharedGeometry(geometry);
     const srcVerticesCount = geometry.getAttribute('position').count;
 
-    return setLevelIndex(createSharedGeometry(geometry), level.indexArray, srcBytesPerIndex, srcVerticesCount, optimizeMemory);
+    return setLevelIndex(sharedGeometry, level.indexArray, srcBytesPerIndex, srcVerticesCount, optimizeMemory);
   }
 
-  const [dstGeometry, remap] = compactGeometry(geometry, level.indexArray);
+  const compacted = compactGeometry(geometry, level.indexArray);
+  const verticesCount = compacted.geometry.getAttribute('position').count;
 
-  if (level.positionArray !== undefined) updateLevelVertices(dstGeometry, remap, level.positionArray, level.attributes);
+  if (level.positionArray !== undefined) updateLevelVertices(compacted.geometry, compacted.remap, level.positionArray, level.attributes);
 
-  return setLevelIndex(dstGeometry, level.indexArray, srcBytesPerIndex, dstGeometry.getAttribute('position').count, optimizeMemory);
+  return setLevelIndex(compacted.geometry, level.indexArray, srcBytesPerIndex, verticesCount, optimizeMemory);
 }
 
 function updateLevelVertices(geometry: BufferGeometry, remap: Uint32Array, positionArray: Float32Array, attributes?: PackedAttributes): void {
@@ -239,14 +213,10 @@ function updateLevelVertices(geometry: BufferGeometry, remap: Uint32Array, posit
   geometry.boundingSphere = null;
 }
 
-function setLevelIndex(
-  geometry: BufferGeometry,
-  indexArray: Uint32Array,
-  srcBytesPerIndex: number,
-  verticesCount: number,
-  optimizeMemory?: boolean
-): BufferGeometry {
-  geometry.setIndex(new BufferAttribute(toIndexArray(indexArray, srcBytesPerIndex, verticesCount, optimizeMemory), 1));
+function setLevelIndex(geometry: BufferGeometry, indexArray: Uint32Array, srcBytesPerIndex: number, verticesCount: number, optimizeMemory?: boolean): BufferGeometry {
+  const levelIndexArray = toResultIndexArray(indexArray, srcBytesPerIndex, verticesCount, optimizeMemory);
+
+  geometry.setIndex(new BufferAttribute(levelIndexArray, 1));
 
   return geometry;
 }

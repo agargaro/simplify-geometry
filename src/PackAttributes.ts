@@ -1,7 +1,8 @@
 import type { BufferGeometry, TypedArray } from 'three';
-import { isInterleavedAttribute, unusedVertex, type GeometryAttribute } from './GeometryAttributes.js';
+import { getItemOffset, getItemStride, getNormalizationScale, isDirectionAttribute, type GeometryAttribute } from './GeometryAttributes.js';
+import { positionStride, unusedVertex } from './Meshopt.js';
 import type { SimplifyAttributes } from './Simplify.js';
-import { hasPositiveWeight, validateAttributeComponents, validateAttributeWeight, validateWeightedAttribute } from './Validation.js';
+import { hasPositiveWeight, validateAttributeWeight, validateWeightedAttribute } from './Validation.js';
 
 export type AttributeWeights = Record<string, number | number[]>;
 
@@ -25,7 +26,7 @@ export function packAttributes(geometry: BufferGeometry, attributeWeights?: Attr
   const stride = weights.length;
   const array = new Float32Array(stride * geometry.getAttribute('position').count);
 
-  writeAttributes(array, stride, geometry, names);
+  packAttributeList(array, stride, geometry, names);
 
   return { array, stride, weights, names };
 }
@@ -36,21 +37,25 @@ export function packAttributes(geometry: BufferGeometry, attributeWeights?: Attr
  * @internal
  */
 export function unpackAttributes(geometry: BufferGeometry, remap: Uint32Array, positionArray: Float32Array, attributes?: PackedAttributes): void {
-  readAttribute(positionArray, 3, 0, geometry.getAttribute('position'), remap);
+  const position = geometry.getAttribute('position');
+
+  unpackAttribute(positionArray, positionStride, 0, position, remap);
 
   if (attributes === undefined) return;
 
+  const packedArray = attributes.array;
+  const packedStride = attributes.stride;
   const names = attributes.names;
-  let srcOffset = 0;
+  let packedOffset = 0;
 
   for (let i = 0, l = names.length; i < l; i++) {
-    const attribute = geometry.getAttribute(names[i]);
-    const isDirection = names[i] === 'normal' || names[i] === 'tangent';
+    const name = names[i];
+    const attribute = geometry.getAttribute(name);
 
-    if (isDirection) normalizeDirections(attributes.array, attributes.stride, srcOffset, remap);
+    if (isDirectionAttribute(name)) normalizeDirections(packedArray, packedStride, packedOffset, remap);
 
-    readAttribute(attributes.array, attributes.stride, srcOffset, attribute, remap);
-    srcOffset += attribute.itemSize;
+    unpackAttribute(packedArray, packedStride, packedOffset, attribute, remap);
+    packedOffset += attribute.itemSize;
   }
 }
 
@@ -75,8 +80,9 @@ function getWeights(geometry: BufferGeometry, attributeWeights: AttributeWeights
   const weights: number[] = [];
 
   for (let i = 0, l = names.length; i < l; i++) {
-    const weight = attributeWeights[names[i]];
-    const itemSize = geometry.getAttribute(names[i]).itemSize;
+    const name = names[i];
+    const weight = attributeWeights[name];
+    const itemSize = geometry.getAttribute(name).itemSize;
     const isWeightList = Array.isArray(weight);
 
     for (let j = 0; j < itemSize; j++) {
@@ -84,49 +90,103 @@ function getWeights(geometry: BufferGeometry, attributeWeights: AttributeWeights
     }
   }
 
-  validateAttributeComponents(weights.length);
-
   return weights;
 }
 
-function writeAttributes(dstArray: Float32Array, dstStride: number, geometry: BufferGeometry, names: string[]): void {
+function packAttributeList(dstArray: Float32Array, dstStride: number, geometry: BufferGeometry, names: string[]): void {
   let dstOffset = 0;
 
   for (let i = 0, l = names.length; i < l; i++) {
     const attribute = geometry.getAttribute(names[i]);
 
-    writeAttribute(dstArray, dstStride, dstOffset, attribute);
+    packAttribute(dstArray, dstStride, dstOffset, attribute);
     dstOffset += attribute.itemSize;
   }
 }
 
-function writeAttribute(dstArray: Float32Array, dstStride: number, dstOffset: number, attribute: GeometryAttribute): void {
-  const isInterleaved = isInterleavedAttribute(attribute);
+function packAttribute(dstArray: Float32Array, dstStride: number, dstOffset: number, attribute: GeometryAttribute): void {
+  const isQuantized = getQuantizationScale(attribute) !== 1;
+
+  if (isQuantized) {
+    packQuantizedAttribute(dstArray, dstStride, dstOffset, attribute);
+    return;
+  }
+
+  packFloatAttribute(dstArray, dstStride, dstOffset, attribute);
+}
+
+function packFloatAttribute(dstArray: Float32Array, dstStride: number, dstOffset: number, attribute: GeometryAttribute): void {
   const srcArray = attribute.array;
-  const srcStride = isInterleaved ? attribute.data.stride : attribute.itemSize;
-  const srcOffset = isInterleaved ? attribute.offset : 0;
+  const srcStride = getItemStride(attribute);
+  const srcOffset = getItemOffset(attribute);
   const itemSize = attribute.itemSize;
-  const divisor = attribute.normalized ? getNormalizationScale(srcArray) : 1;
-  const minValue = attribute.normalized && isSignedIntegerArray(srcArray) ? -1 : -Infinity;
 
   for (let i = 0, l = attribute.count; i < l; i++) {
     const dstIndex = i * dstStride + dstOffset;
     const srcIndex = i * srcStride + srcOffset;
 
     for (let j = 0; j < itemSize; j++) {
-      dstArray[dstIndex + j] = Math.max(srcArray[srcIndex + j] / divisor, minValue);
+      dstArray[dstIndex + j] = srcArray[srcIndex + j];
     }
   }
 }
 
-function readAttribute(srcArray: Float32Array, srcStride: number, srcOffset: number, attribute: GeometryAttribute, remap: Uint32Array): void {
-  const isInterleaved = isInterleavedAttribute(attribute);
-  const dstArray = attribute.array;
-  const dstStride = isInterleaved ? attribute.data.stride : attribute.itemSize;
-  const dstOffset = isInterleaved ? attribute.offset : 0;
+function packQuantizedAttribute(dstArray: Float32Array, dstStride: number, dstOffset: number, attribute: GeometryAttribute): void {
+  const srcArray = attribute.array;
+  const srcStride = getItemStride(attribute);
+  const srcOffset = getItemOffset(attribute);
   const itemSize = attribute.itemSize;
-  const scale = attribute.normalized ? getNormalizationScale(dstArray) : 1;
-  const minValue = isSignedIntegerArray(dstArray) ? -1 : 0;
+  const scale = getNormalizationScale(srcArray);
+  const minValue = getMinNormalizedValue(srcArray);
+
+  for (let i = 0, l = attribute.count; i < l; i++) {
+    const dstIndex = i * dstStride + dstOffset;
+    const srcIndex = i * srcStride + srcOffset;
+
+    for (let j = 0; j < itemSize; j++) {
+      dstArray[dstIndex + j] = dequantize(srcArray[srcIndex + j], scale, minValue);
+    }
+  }
+}
+
+function unpackAttribute(srcArray: Float32Array, srcStride: number, srcOffset: number, attribute: GeometryAttribute, remap: Uint32Array): void {
+  const isQuantized = getQuantizationScale(attribute) !== 1;
+
+  if (isQuantized) {
+    unpackQuantizedAttribute(srcArray, srcStride, srcOffset, attribute, remap);
+    return;
+  }
+
+  unpackFloatAttribute(srcArray, srcStride, srcOffset, attribute, remap);
+}
+
+function unpackFloatAttribute(srcArray: Float32Array, srcStride: number, srcOffset: number, attribute: GeometryAttribute, remap: Uint32Array): void {
+  const dstArray = attribute.array;
+  const dstStride = getItemStride(attribute);
+  const dstOffset = getItemOffset(attribute);
+  const itemSize = attribute.itemSize;
+
+  for (let i = 0, l = remap.length; i < l; i++) {
+    const dstVertex = remap[i];
+
+    if (dstVertex === unusedVertex) continue;
+
+    const srcIndex = i * srcStride + srcOffset;
+    const dstIndex = dstVertex * dstStride + dstOffset;
+
+    for (let j = 0; j < itemSize; j++) {
+      dstArray[dstIndex + j] = srcArray[srcIndex + j];
+    }
+  }
+}
+
+function unpackQuantizedAttribute(srcArray: Float32Array, srcStride: number, srcOffset: number, attribute: GeometryAttribute, remap: Uint32Array): void {
+  const dstArray = attribute.array;
+  const dstStride = getItemStride(attribute);
+  const dstOffset = getItemOffset(attribute);
+  const itemSize = attribute.itemSize;
+  const scale = getNormalizationScale(dstArray);
+  const minValue = getMinNormalizedValue(dstArray);
 
   for (let i = 0, l = remap.length; i < l; i++) {
     const dstVertex = remap[i];
@@ -142,9 +202,11 @@ function readAttribute(srcArray: Float32Array, srcStride: number, srcOffset: num
   }
 }
 
-function quantize(value: number, scale: number, minValue: number): number {
-  if (scale === 1) return value;
+function dequantize(value: number, scale: number, minValue: number): number {
+  return Math.max(value / scale, minValue);
+}
 
+function quantize(value: number, scale: number, minValue: number): number {
   return Math.round(Math.min(Math.max(value, minValue), 1) * scale);
 }
 
@@ -166,21 +228,13 @@ function normalizeDirections(array: Float32Array, stride: number, offset: number
   }
 }
 
-function getNormalizationScale(array: TypedArray): number {
-  const type = array.constructor;
-
-  if (type === Uint8Array || type === Uint8ClampedArray) return 255;
-  if (type === Int8Array) return 127;
-  if (type === Uint16Array) return 65535;
-  if (type === Int16Array) return 32767;
-  if (type === Uint32Array) return 4294967295;
-  if (type === Int32Array) return 2147483647;
-
-  return 1;
+function getQuantizationScale(attribute: GeometryAttribute): number {
+  return attribute.normalized ? getNormalizationScale(attribute.array) : 1;
 }
 
-function isSignedIntegerArray(array: TypedArray): boolean {
+function getMinNormalizedValue(array: TypedArray): number {
   const type = array.constructor;
+  const isSigned = type === Int8Array || type === Int16Array || type === Int32Array;
 
-  return type === Int8Array || type === Int16Array || type === Int32Array;
+  return isSigned ? -1 : 0;
 }

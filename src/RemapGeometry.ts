@@ -1,14 +1,30 @@
-import { MeshoptSimplifier } from 'meshoptimizer/simplifier';
 import { BufferAttribute, BufferGeometry, Float16BufferAttribute, InterleavedBuffer, InterleavedBufferAttribute, type TypedArray } from 'three';
-import {
-  isFloat16Attribute,
-  isInstancedAttribute,
-  isInterleavedAttribute,
-  unusedVertex,
-  type GeometryAttribute,
-  type MorphAttributes
-} from './GeometryAttributes.js';
+import { isFloat16Attribute, isInstancedAttribute, isInterleavedAttribute, type GeometryAttribute, type MorphAttributes } from './GeometryAttributes.js';
+import * as Meshopt from './Meshopt.js';
 import type { IndexArray } from './Simplify.js';
+
+/**
+ * Geometry without index that only contains the used vertices, and the remap from source to compacted vertices.
+ * @internal
+ */
+export interface CompactedGeometry {
+  geometry: BufferGeometry;
+  remap: Uint32Array;
+}
+
+/**
+ * Geometry without index shared by every level, and the index arrays of the levels remapped to it.
+ * @internal
+ */
+export interface ReorderedGeometry {
+  geometry: BufferGeometry;
+  indexArrays: Uint32Array[];
+}
+
+interface ConcatenatedIndexArrays {
+  indexArray: Uint32Array;
+  views: Uint32Array[];
+}
 
 type InterleavedBuffers = Map<InterleavedBuffer, InterleavedBuffer>;
 type TypedArrayConstructor = new (length: number) => TypedArray;
@@ -25,36 +41,47 @@ export function createSharedGeometry(geometry: BufferGeometry): BufferGeometry {
   const morphNames = Object.keys(srcMorphAttributes);
 
   for (let i = 0, l = names.length; i < l; i++) {
-    dstGeometry.setAttribute(names[i], geometry.getAttribute(names[i]));
+    const name = names[i];
+
+    dstGeometry.setAttribute(name, geometry.getAttribute(name));
   }
 
   for (let i = 0, l = morphNames.length; i < l; i++) {
-    dstMorphAttributes[morphNames[i]] = srcMorphAttributes[morphNames[i]].slice();
+    const name = morphNames[i];
+
+    dstMorphAttributes[name] = srcMorphAttributes[name].slice();
   }
 
   return dstGeometry;
 }
 
 /**
- * Remaps `indexArray` in place and returns a geometry without index that only contains the vertices it uses,
- * and the remap from source to compacted vertices.
+ * Remaps `indexArray` in place and returns a geometry without index that only contains the vertices it uses.
  * @internal
  */
-export function compactGeometry(geometry: BufferGeometry, indexArray: Uint32Array): [BufferGeometry, Uint32Array] {
-  const [remap, verticesCount] = MeshoptSimplifier.compactMesh(indexArray);
+export function compactGeometry(geometry: BufferGeometry, indexArray: Uint32Array): CompactedGeometry {
+  const compacted = Meshopt.compactMesh(indexArray);
+  const dstGeometry = remapGeometry(geometry, compacted.remap, compacted.verticesCount);
 
-  return [remapGeometry(geometry, remap, verticesCount), remap];
+  return { geometry: dstGeometry, remap: compacted.remap };
 }
 
 /**
  * Returns a geometry without index whose vertex order lets coarser levels use a prefix of the vertices,
- * and the arrays of `indexArrays` remapped to it, as views of a single buffer.
+ * and the arrays of `indexArrays` remapped to it, as views of a single buffer: copy them before exposing them.
  * @internal
  */
-export function reorderGeometry(geometry: BufferGeometry, indexArrays: IndexArray[]): [BufferGeometry, Uint32Array[]] {
+export function reorderGeometry(geometry: BufferGeometry, indexArrays: IndexArray[]): ReorderedGeometry {
+  const concatenated = concatCoarsestFirst(indexArrays);
+  const compacted = compactGeometry(geometry, concatenated.indexArray);
+
+  return { geometry: compacted.geometry, indexArrays: concatenated.views };
+}
+
+function concatCoarsestFirst(indexArrays: IndexArray[]): ConcatenatedIndexArrays {
   const levelsCount = indexArrays.length;
   const offsets = new Uint32Array(levelsCount);
-  const dstIndexArrays = new Array<Uint32Array>(levelsCount);
+  const views = new Array<Uint32Array>(levelsCount);
   let indicesCount = 0;
 
   for (let i = levelsCount - 1; i >= 0; i--) {
@@ -62,14 +89,17 @@ export function reorderGeometry(geometry: BufferGeometry, indexArrays: IndexArra
     indicesCount += indexArrays[i].length;
   }
 
-  const concatIndexArray = new Uint32Array(indicesCount);
+  const indexArray = new Uint32Array(indicesCount);
 
   for (let i = 0; i < levelsCount; i++) {
-    concatIndexArray.set(indexArrays[i], offsets[i]);
-    dstIndexArrays[i] = concatIndexArray.subarray(offsets[i], offsets[i] + indexArrays[i].length);
+    const levelIndexArray = indexArrays[i];
+    const offset = offsets[i];
+
+    indexArray.set(levelIndexArray, offset);
+    views[i] = indexArray.subarray(offset, offset + levelIndexArray.length);
   }
 
-  return [compactGeometry(geometry, concatIndexArray)[0], dstIndexArrays];
+  return { indexArray, views };
 }
 
 function createEmptyGeometry(geometry: BufferGeometry): BufferGeometry {
@@ -90,9 +120,10 @@ function remapGeometry(geometry: BufferGeometry, remap: Uint32Array, verticesCou
   const names = Object.keys(geometry.attributes);
 
   for (let i = 0, l = names.length; i < l; i++) {
-    const attribute = remapAttribute(geometry.getAttribute(names[i]), remap, verticesCount, interleavedBuffers);
+    const name = names[i];
+    const attribute = remapAttribute(geometry.getAttribute(name), remap, verticesCount, interleavedBuffers);
 
-    dstGeometry.setAttribute(names[i], attribute);
+    dstGeometry.setAttribute(name, attribute);
   }
 
   remapMorphAttributes(geometry, dstGeometry, remap, verticesCount, interleavedBuffers);
@@ -100,26 +131,21 @@ function remapGeometry(geometry: BufferGeometry, remap: Uint32Array, verticesCou
   return dstGeometry;
 }
 
-function remapMorphAttributes(
-  srcGeometry: BufferGeometry,
-  dstGeometry: BufferGeometry,
-  remap: Uint32Array,
-  verticesCount: number,
-  interleavedBuffers: InterleavedBuffers
-): void {
+function remapMorphAttributes(srcGeometry: BufferGeometry, dstGeometry: BufferGeometry, remap: Uint32Array, verticesCount: number, interleavedBuffers: InterleavedBuffers): void {
   const srcMorphAttributes = srcGeometry.morphAttributes as MorphAttributes;
   const dstMorphAttributes = dstGeometry.morphAttributes as MorphAttributes;
   const names = Object.keys(srcMorphAttributes);
 
   for (let i = 0, l = names.length; i < l; i++) {
-    const srcList = srcMorphAttributes[names[i]];
+    const name = names[i];
+    const srcList = srcMorphAttributes[name];
     const dstList = new Array<GeometryAttribute>(srcList.length);
 
     for (let j = 0, m = srcList.length; j < m; j++) {
       dstList[j] = remapAttribute(srcList[j], remap, verticesCount, interleavedBuffers);
     }
 
-    dstMorphAttributes[names[i]] = dstList;
+    dstMorphAttributes[name] = dstList;
   }
 }
 
@@ -131,13 +157,14 @@ function remapAttribute(attribute: GeometryAttribute, remap: Uint32Array, vertic
 }
 
 function remapBufferAttribute(attribute: BufferAttribute, remap: Uint32Array, verticesCount: number): BufferAttribute {
-  const length = verticesCount * attribute.itemSize;
+  const itemSize = attribute.itemSize;
+  const length = verticesCount * itemSize;
   const ArrayType = attribute.array.constructor as TypedArrayConstructor;
   const dstAttribute = isFloat16Attribute(attribute)
-    ? new Float16BufferAttribute(length, attribute.itemSize, attribute.normalized)
-    : new BufferAttribute(new ArrayType(length), attribute.itemSize, attribute.normalized);
+    ? new Float16BufferAttribute(length, itemSize, attribute.normalized)
+    : new BufferAttribute(new ArrayType(length), itemSize, attribute.normalized);
 
-  remapArray(attribute.array, dstAttribute.array, attribute.itemSize, remap);
+  remapArray(attribute.array, dstAttribute.array, itemSize, remap);
 
   dstAttribute.name = attribute.name;
   dstAttribute.usage = attribute.usage;
@@ -146,12 +173,7 @@ function remapBufferAttribute(attribute: BufferAttribute, remap: Uint32Array, ve
   return dstAttribute;
 }
 
-function remapInterleavedAttribute(
-  attribute: InterleavedBufferAttribute,
-  remap: Uint32Array,
-  verticesCount: number,
-  interleavedBuffers: InterleavedBuffers
-): InterleavedBufferAttribute {
+function remapInterleavedAttribute(attribute: InterleavedBufferAttribute, remap: Uint32Array, verticesCount: number, interleavedBuffers: InterleavedBuffers): InterleavedBufferAttribute {
   const buffer = getRemappedInterleavedBuffer(attribute.data, remap, verticesCount, interleavedBuffers);
   const dstAttribute = new InterleavedBufferAttribute(buffer, attribute.itemSize, attribute.offset, attribute.normalized);
 
@@ -165,10 +187,11 @@ function getRemappedInterleavedBuffer(buffer: InterleavedBuffer, remap: Uint32Ar
 
   if (cachedBuffer !== undefined) return cachedBuffer;
 
+  const stride = buffer.stride;
   const ArrayType = buffer.array.constructor as TypedArrayConstructor;
-  const dstBuffer = new InterleavedBuffer(new ArrayType(verticesCount * buffer.stride), buffer.stride);
+  const dstBuffer = new InterleavedBuffer(new ArrayType(verticesCount * stride), stride);
 
-  remapArray(buffer.array, dstBuffer.array, buffer.stride, remap);
+  remapArray(buffer.array, dstBuffer.array, stride, remap);
 
   dstBuffer.usage = buffer.usage;
   interleavedBuffers.set(buffer, dstBuffer);
@@ -180,7 +203,7 @@ function remapArray(srcArray: TypedArray, dstArray: TypedArray, stride: number, 
   for (let i = 0, l = remap.length; i < l; i++) {
     const dstVertex = remap[i];
 
-    if (dstVertex === unusedVertex) continue;
+    if (dstVertex === Meshopt.unusedVertex) continue;
 
     const srcIndex = i * stride;
     const dstIndex = dstVertex * stride;

@@ -14,7 +14,7 @@ export default defineConfig([
       'no-nested-ternary': 'warn',
       '@stylistic/max-len': ['warn', {
         code: 140,
-        ignorePattern: '^\\s*(export )?(async )?function ',
+        ignorePattern: '^\\s*(import |(export )?(async )?function )',
         ignoreComments: true,
         ignoreStrings: true,
         ignoreTemplateLiterals: true,
