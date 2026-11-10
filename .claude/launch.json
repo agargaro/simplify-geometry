@@ -1,0 +1,30 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "examples",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "vite",
+        "--port",
+        "5173",
+        "--strictPort"
+      ],
+      "port": 5173
+    },
+    {
+      "name": "site-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "vite",
+        "preview",
+        "-c",
+        "vite.site.config.ts",
+        "--port",
+        "4173",
+        "--strictPort"
+      ],
+      "port": 4173
+    }
+  ]
+}

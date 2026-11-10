@@ -1,47 +1,93 @@
-import { Flags, MeshoptSimplifier } from 'meshoptimizer';
+import * as Meshopt from './Meshopt.js';
+import { validatePositionArray, validateSimplifyArgs } from './Validation.js';
 
-export type SimplifyResult = [Uint32Array | Uint16Array | Uint8Array, number];
+export type IndexArray = Uint32Array | Uint16Array | Uint8Array;
+
+export type SimplifyResult = [IndexArray, number];
 
 export interface SimplifyParams {
-  ratio: number;
+  ratio?: number;
   error?: number;
   lockBorder?: boolean;
   errorAbsolute?: boolean;
   sparse?: boolean;
   prune?: boolean;
-  logAppearanceError?: boolean;
+  regularize?: boolean;
+  regularizeLight?: boolean;
+  permissive?: boolean;
+  preserveFolds?: boolean;
+  errorClamped?: boolean;
+  vertexLock?: Uint8Array;
+  /**
+   * Uses meshoptimizer `simplifySloppy`: faster and able to merge disconnected parts, but it ignores seams, borders and attributes,
+   * so the result has a larger error. Supports only `ratio`, `error`, `errorAbsolute`, `vertexLock` and `optimizeMemory`:
+   * the other flags and the attributes are ignored.
+   * @default false
+   */
+  sloppy?: boolean;
+  /** @default true */
   optimizeMemory?: boolean;
 }
 
-export async function simplify(srcIndexArray: Uint32Array, srcPositionArray: Float32Array, params: SimplifyParams): Promise<SimplifyResult> {
-  await MeshoptSimplifier.ready;
+export interface SimplifyAttributes {
+  array: Float32Array;
+  stride: number;
+  weights: number[];
+}
 
-  const flags: Flags[] = [];
-  if (params.lockBorder) flags.push('LockBorder');
-  if (params.sparse) flags.push('Sparse');
-  if (params.errorAbsolute) flags.push('ErrorAbsolute');
-  if (params.prune) flags.push('Prune');
+export async function simplifyReady(): Promise<void> {
+  await Meshopt.load();
+}
 
-  const error = params.error ?? 1;
-  const targetCount = 3 * Math.floor(params.ratio * (srcIndexArray.length / 3));
+export function simplify(srcIndexArray: IndexArray, srcPositionArray: Float32Array, params: SimplifyParams, srcAttributes?: SimplifyAttributes): SimplifyResult {
+  Meshopt.validateReady();
+  validateSimplifyArgs(srcIndexArray, srcPositionArray, params);
 
-  const result: SimplifyResult = MeshoptSimplifier.simplify(srcIndexArray, srcPositionArray, 3, targetCount, error, flags);
-  const dstIndexArray = result[0];
+  const verticesCount = srcPositionArray.length / Meshopt.positionStride;
+  const srcBytesPerIndex = srcIndexArray.BYTES_PER_ELEMENT;
+  const indexArray = Meshopt.toUint32IndexArray(srcIndexArray);
+  const result = Meshopt.simplify(indexArray, srcPositionArray, params, srcAttributes);
+  const dstIndexArray = toResultIndexArray(result.indexArray, srcBytesPerIndex, verticesCount, params.optimizeMemory);
 
-  if (dstIndexArray.length === srcIndexArray.length) {
-    console.error('Simplify: simplification failed');
-  }
+  return [dstIndexArray, result.error];
+}
 
-  if (params.logAppearanceError) {
-    const appearanceError = result[1];
-    console.log(`Simplify: appearance error: ${appearanceError}`);
-  }
+export function getScale(srcPositionArray: Float32Array): number {
+  Meshopt.validateReady();
+  validatePositionArray(srcPositionArray);
 
-  const verticesCount = srcPositionArray.length / 3;
-  if (params.optimizeMemory && verticesCount <= 65535) {
-    result[0] = verticesCount <= 255 ? new Uint8Array(dstIndexArray.length) : new Uint16Array(dstIndexArray.length);
-    result[0].set(dstIndexArray);
-  }
+  return Meshopt.getScale(srcPositionArray);
+}
 
-  return result;
+/**
+ * Maps every vertex to the first vertex with the same position. Vertices that share a position but not their attributes lie on a seam.
+ */
+export function generatePositionRemap(srcPositionArray: Float32Array): Uint32Array {
+  Meshopt.validateReady();
+  validatePositionArray(srcPositionArray);
+
+  return Meshopt.generatePositionRemap(srcPositionArray);
+}
+
+/**
+ * The returned indices keep the source type, or a smaller one that fits the vertex count when `optimizeMemory` is enabled (default).
+ * The returned array always owns its whole buffer, so a view of a larger buffer is copied.
+ * @internal
+ */
+export function toResultIndexArray(indexArray: Uint32Array, srcBytesPerIndex: number, verticesCount: number, optimizeMemory?: boolean): IndexArray {
+  const smallestBytesPerIndex = getSmallestBytesPerIndex(verticesCount);
+  const bytesPerIndex = optimizeMemory === false ? srcBytesPerIndex : Math.min(srcBytesPerIndex, smallestBytesPerIndex);
+  const isView = indexArray.byteLength !== indexArray.buffer.byteLength;
+
+  if (bytesPerIndex === 1) return new Uint8Array(indexArray);
+  if (bytesPerIndex === 2) return new Uint16Array(indexArray);
+  if (isView) return indexArray.slice();
+
+  return indexArray;
+}
+
+function getSmallestBytesPerIndex(verticesCount: number): number {
+  if (verticesCount <= 255) return 1;
+  if (verticesCount <= 65535) return 2;
+  return 4;
 }
