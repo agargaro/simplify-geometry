@@ -1,10 +1,11 @@
-import { instanceSeparation, instancesCount, type LevelSettings, type Settings } from './Settings.js';
+import type { LevelSettings, Settings } from './Settings.js';
 import type { GeometryLOD } from './Simplification.js';
 
 const maxTopRowAngle = 0.1;
 const minTopRowAngle = 0.02;
 const minFarRadii = 30;
 const minNearRadii = 3;
+const fieldDepthRatio = 30;
 const fieldAspect = 1.6;
 const fieldFill = 2.5;
 const fieldSeed = 1337;
@@ -126,19 +127,19 @@ export interface FieldLayout {
 }
 
 /**
- * Scatters the instances on the ground seen by a camera that looks down from above, at least `instanceSeparation` radii apart.
- * The farthest instances lie past the last level switch near the top of the view and the nearest ones before the first switch near
- * the bottom, lowering the camera when the switches span a wide range. The camera distances are sampled on a logarithmic scale, so
- * every level gets instances, and the field grows until all of them fit.
+ * Scatters `settings.instances` instances on the ground seen by a camera that looks down from above, at least `settings.spread` radii
+ * apart. The layout depends only on the mesh radius, the instances and the spread, not on the level switches, so that changing a
+ * switch changes which level each instance draws and never moves the instances under the camera. The camera distances are sampled on
+ * a logarithmic scale, so every level gets instances, and the field grows until all of them fit.
  */
-export function getFieldLayout(lod: GeometryLOD, thresholds: number[], settings: Settings, fov: number): FieldLayout {
+export function getFieldLayout(lod: GeometryLOD, settings: Settings, fov: number): FieldLayout {
   const radius = lod.radius;
-  const separation = radius * instanceSeparation;
+  const instancesCount = settings.instances;
+  const separation = radius * settings.spread;
   const tanHalfWidth = getTanHalfFov(fov) * fieldAspect * 0.92;
-  const range = getSwitchRange(lod, thresholds, settings, fov);
   const minFar = Math.sqrt((instancesCount * separation * separation * fieldFill) / tanHalfWidth);
-  const far = Math.max(range[1] * 1.3, radius * minFarRadii, minFar);
-  const near = Math.max(Math.min(range[0] * 0.8, far / 8), radius * minNearRadii);
+  const far = Math.max(radius * minFarRadii, minFar);
+  const near = Math.max(far / fieldDepthRatio, radius * minNearRadii);
   const bottomAngle = maxTopRowAngle + ((fov * Math.PI) / 360) * 1.6;
   const topAngle = Math.min(Math.max(Math.asin(Math.min((Math.sin(bottomAngle) * near) / far, 1)), minTopRowAngle), maxTopRowAngle);
   const height = far * Math.sin(topAngle);
@@ -186,25 +187,6 @@ function createRandom(seed: number): () => number {
 
     return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
   };
-}
-
-/**
- * Returns the smallest and the largest valid switch distance, or `[Infinity, 0]` without one.
- */
-function getSwitchRange(lod: GeometryLOD, thresholds: number[], settings: Settings, fov: number): [number, number] {
-  let min = Infinity;
-  let max = 0;
-
-  for (const threshold of thresholds) {
-    const distance = getSwitchDistance(threshold, lod.radius, settings, fov);
-
-    if (!Number.isFinite(distance) || distance <= 0) continue;
-
-    min = Math.min(min, distance);
-    max = Math.max(max, distance);
-  }
-
-  return [min, max];
 }
 
 function getTanHalfFov(fov: number): number {

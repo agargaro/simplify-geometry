@@ -24,6 +24,8 @@ export class LevelsPanel {
   private readonly removeButton = createElement('button', 'icon-button');
   private readonly list = createElement('ol', 'level-list');
   private readonly summary = createElement('p', 'summary');
+  /** Holds the settings shared by every level, under the list. */
+  readonly settingsContainer = createElement('div', 'levels-settings');
   private readonly drawn = createElement('span', 'drawn-value');
   private readonly drawnBar = createElement('i');
   private rows: HTMLButtonElement[] = [];
@@ -69,13 +71,14 @@ export class LevelsPanel {
     drawnTrack.append(this.drawnBar);
     drawnRow.append(drawnLabel, this.drawn, drawnTrack);
     footer.append(drawnRow, this.summary);
-    root.append(header, heads, this.list, footer);
+    root.append(header, heads, this.list, this.settingsContainer, footer);
   }
 
   render(snapshot: Snapshot): void {
     const { lod, draw, thresholds, used, model, fov, warnings } = snapshot;
     const levels = lod.levels;
-    const settingsCount = getLevels(this.settings).length;
+    const levelSettings = getLevels(this.settings);
+    const settingsCount = levelSettings.length;
     const fullTriangles = getTriangles(levels[0].geometry);
     let totalTriangles = 0;
 
@@ -93,13 +96,19 @@ export class LevelsPanel {
       const meta: string[] = [];
 
       totalTriangles += triangles;
-      meta.push(`<span data-tooltip="${descriptions.levelError}">err ${this.formatError(levels[level].error)}</span>`);
-
-      if (level === 0) meta.push('<span>source</span>');
+      if (level === 0) meta.push('<span>source mesh</span>');
       else if (isUnused) meta.push('<span class="is-warn">never used</span>');
       else meta.push(`<span data-tooltip="${descriptions.levelSwitch}">${this.formatSwitch(thresholds[level - 1], lod.radius, fov)}</span>`);
 
-      if (model.skin !== null) meta.push(`<span data-tooltip="${descriptions.levelBones}">${draw.influences[level]} infl/vtx</span>`);
+      if (level > 0) meta.push(`<span data-tooltip="${descriptions.levelError}">error ${this.formatError(levels[level].error)}</span>`);
+
+      if (model.skin !== null) {
+        const influences = draw.influences[level];
+        const frames = level > 0 && !levelSettings[level - 1].interpolateFrames ? 'nearest frame' : 'blended frames';
+
+        meta.push(`<span data-tooltip="${descriptions.levelBones}">${influences} ${influences === 1 ? 'bone' : 'bones'} per vertex</span>`);
+        meta.push(`<span data-tooltip="${descriptions.levelFrames}">${frames}</span>`);
+      }
 
       row.type = 'button';
       row.dataset['level'] = String(level);
@@ -175,15 +184,14 @@ export class LevelsPanel {
   }
 
   private formatError(error: number): string {
-    return this.settings.errorAbsolute ? `${formatDecimal(error)} u` : formatDecimal(error);
+    return this.settings.errorAbsolute ? `${formatDecimal(error)} u` : `${formatPercent(error)} of size`;
   }
 
   private formatSwitch(threshold: number, radius: number, fov: number): string {
     const distance = formatDistance(getSwitchDistance(threshold, radius, this.settings, fov));
+    const screenSize = formatPercent(getSwitchScreenSize(threshold, radius, this.settings, fov));
 
-    if (this.settings.thresholdMode === 'distance') return `switch ${distance} u`;
-
-    return `switch ${formatPercent(getSwitchScreenSize(threshold, radius, this.settings, fov))} · ${distance} u`;
+    return `from ${distance} u (${screenSize} of screen)`;
   }
 }
 

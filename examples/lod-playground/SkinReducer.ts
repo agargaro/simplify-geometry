@@ -40,6 +40,20 @@ export class SkinReducer {
     return reductions.results[maxInfluences - 1] ?? this.measure(level, reductions, tolerance);
   }
 
+  /**
+   * Keeps at most `count` influences per vertex in `level`, whatever displacement it causes.
+   */
+  reduceTo(level: number, count: number): ReducedSkinInfluences {
+    const reductions = this.getLevel(level);
+    const cached = reductions.results[count - 1];
+
+    if (cached !== null) return cached;
+
+    const result = reduceSkinInfluences(this.geometries[level], this.skin.bake, { error: 0, maxInfluences: count, bindMatrix: this.skin.bindMatrix });
+
+    return this.store(reductions, result);
+  }
+
   dispose(): void {
     for (const reductions of this.levels as (LevelReductions | undefined)[]) {
       if (reductions === undefined) continue;
@@ -67,7 +81,15 @@ export class SkinReducer {
 
     for (let i = 0; i < count - 1; i++) reductions.lowerBounds[i] = Math.max(reductions.lowerBounds[i], tolerance);
 
-    const cached = reductions.results[count - 1];
+    return this.store(reductions, result);
+  }
+
+  /**
+   * Caches `result` by its influence count, or returns the result already cached for that count.
+   */
+  private store(reductions: LevelReductions, result: ReducedSkinInfluences): ReducedSkinInfluences {
+    const index = result.influences - 1;
+    const cached = reductions.results[index];
 
     if (cached !== null) {
       result.geometry.dispose();
@@ -75,7 +97,7 @@ export class SkinReducer {
       return cached;
     }
 
-    reductions.results[count - 1] = result;
+    reductions.results[index] = result;
 
     return result;
   }

@@ -4,7 +4,7 @@ import { icon, type IconName } from './Icons.js';
 import { getDrawnShading } from './LODPreview.js';
 import { isShadingAvailable, type Model } from './Models.js';
 import { modelLabels, modelNames, type ModelName, type PreviewLayout, type Settings, type ShadingMode } from './Settings.js';
-import { exportSettings } from './SettingsIO.js';
+import { createShareLink, exportSettings } from './SettingsIO.js';
 import { randomClip, type ViewState } from './State.js';
 import { descriptions } from './Tooltips.js';
 
@@ -16,6 +16,7 @@ export interface ToolbarCallbacks {
   onImport: (text: string) => void;
   onUndo: () => void;
   onRedo: () => void;
+  onReset: () => void;
 }
 
 export interface ViewportBarCallbacks {
@@ -52,6 +53,7 @@ export class Toolbar {
     const importButton = createToolButton('upload', 'Import', descriptions.import);
     const exportButton = createToolButton('download', 'Export', descriptions.export);
     const linkButton = createToolButton('link', 'Copy link', descriptions.copyLink);
+    const resetButton = createToolButton('reset', 'Reset', descriptions.resetSettings);
 
     brand.innerHTML = `${icon('layers')}<span>simplify-geometry</span><b>LOD</b>`;
     modelInput.type = 'file';
@@ -91,8 +93,9 @@ export class Toolbar {
     exportButton.addEventListener('click', () => {
       downloadText(exportSettings(settings), 'lod-playground.json');
     });
-    linkButton.addEventListener('click', () => void copyText(window.location.href, linkButton));
-    files.append(importButton, exportButton, linkButton, fileInput);
+    linkButton.addEventListener('click', () => void copyText(createShareLink(settings), linkButton));
+    resetButton.addEventListener('click', callbacks.onReset);
+    files.append(resetButton, importButton, exportButton, linkButton, fileInput);
     this.undoButton.addEventListener('click', callbacks.onUndo);
     this.redoButton.addEventListener('click', callbacks.onRedo);
     history.append(this.undoButton, this.redoButton);
@@ -161,7 +164,8 @@ const shadingOptions: { value: ShadingMode; label: string; tooltip: string }[] =
   { value: 'clay', label: 'Clay', tooltip: descriptions.shadingClay },
   { value: 'uv', label: 'UV', tooltip: descriptions.shadingUv },
   { value: 'material', label: 'Material', tooltip: descriptions.shadingMaterial },
-  { value: 'texture', label: 'Texture', tooltip: descriptions.shadingTexture }
+  { value: 'texture', label: 'Texture', tooltip: descriptions.shadingTexture },
+  { value: 'wireframe', label: 'Wireframe', tooltip: descriptions.shadingWireframe }
 ];
 
 const layoutValues: PreviewLayout[] = ['distance', 'levels'];
@@ -174,6 +178,7 @@ export class ViewportBar {
   private readonly shading: HTMLElement;
   private readonly colorByLevel: HTMLButtonElement;
   private readonly flatShading: HTMLButtonElement;
+  private readonly isolate: HTMLButtonElement;
   private model: Model | null = null;
   private levelsCount = 0;
 
@@ -218,14 +223,12 @@ export class ViewportBar {
       callbacks.onChange();
     });
 
-    toggles.append(
-      this.colorByLevel,
-      createToggleButton('Isolate', descriptions.isolate, view.isolate, (value) => {
-        view.isolate = value;
-        callbacks.onHighlight();
-      }),
-      this.flatShading
-    );
+    this.isolate = createToggleButton(`Isolate L${view.selectedLevel}`, descriptions.isolate, view.isolate, (value) => {
+      view.isolate = value;
+      callbacks.onHighlight();
+    });
+
+    toggles.append(this.colorByLevel, this.isolate, this.flatShading);
 
     this.forced.addEventListener('change', () => {
       view.forcedLevel = Number(this.forced.value);
@@ -243,6 +246,13 @@ export class ViewportBar {
   setModel(model: Model): void {
     this.model = model;
     this.updateShading();
+  }
+
+  /**
+   * Names the selected level on the isolate button.
+   */
+  setSelectedLevel(level: number): void {
+    this.isolate.textContent = `Isolate L${level}`;
   }
 
   /**
@@ -267,7 +277,7 @@ export class ViewportBar {
       buttons[i].setAttribute('aria-pressed', String(value === drawn));
     }
 
-    this.colorByLevel.disabled = drawn !== 'clay';
+    this.colorByLevel.disabled = drawn !== 'clay' && drawn !== 'wireframe';
   }
 
   setLevelsCount(count: number): void {

@@ -380,7 +380,19 @@
 
     .level-list {
       flex: 1;
+      min-height: 120px;
       overflow: auto;
+    }
+
+    .levels-settings {
+      flex: none;
+      max-height: 50%;
+      overflow: auto;
+      border-top: 1px solid var(--line);
+    }
+
+    .levels-settings .section:last-child {
+      border-bottom: 0;
     }
 
     .level-row {

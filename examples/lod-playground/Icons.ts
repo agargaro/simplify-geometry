@@ -1,4 +1,4 @@
-export type IconName = 'open' | 'play' | 'pause' | 'plus' | 'minus' | 'copy' | 'link' | 'upload' | 'download' | 'focus' | 'alert' | 'close' | 'layers' | 'undo' | 'redo';
+export type IconName = 'open' | 'play' | 'pause' | 'plus' | 'minus' | 'copy' | 'link' | 'upload' | 'download' | 'focus' | 'alert' | 'close' | 'layers' | 'undo' | 'redo' | 'reset';
 
 const paths: Record<IconName, string> = {
   open: '<path d="M2.5 12.5v-8a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v1"/><path d="M2.5 12.5 4.25 7.5h10l-1.75 5z"/>',
@@ -15,7 +15,8 @@ const paths: Record<IconName, string> = {
   close: '<path d="M4 4l8 8M12 4l-8 8"/>',
   layers: '<path d="M8 2.5 13.5 5.5 8 8.5 2.5 5.5z"/><path d="M2.5 8.25 8 11.25l5.5-3M2.5 10.75 8 13.75l5.5-3"/>',
   undo: '<path d="M5.5 3.5 3 6l2.5 2.5"/><path d="M3 6h6.5a3 3 0 0 1 0 6H7"/>',
-  redo: '<path d="M10.5 3.5 13 6l-2.5 2.5"/><path d="M13 6H6.5a3 3 0 0 0 0 6H9"/>'
+  redo: '<path d="M10.5 3.5 13 6l-2.5 2.5"/><path d="M13 6H6.5a3 3 0 0 0 0 6H9"/>',
+  reset: '<path d="M3.5 8a4.5 4.5 0 1 0 1.3-3.2"/><path d="M4.5 2.5v2.5H7"/>'
 };
 
 export function icon(name: IconName): string {

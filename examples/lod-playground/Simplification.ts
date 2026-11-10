@@ -1,4 +1,4 @@
-import { getScale, simplifyGeometryLOD, type AttributeWeights, type SimplifyGeometryLevelParams, type SimplifyGeometryLODParams, type SimplifyGeometryResult } from '@three.ez/simplify-geometry';
+import { getScale, simplifyGeometryLOD, type SimplifyGeometryLevelParams, type SimplifyGeometryLODParams, type SimplifyGeometryResult } from '@three.ez/simplify-geometry';
 import type { BufferGeometry } from 'three';
 import { countInfluences, type SkinData } from './Models.js';
 import type { SkinReducer } from './SkinReducer.js';
@@ -83,9 +83,10 @@ export function simplifyGeometry(source: BufferGeometry, levels: LevelSettings[]
 
 /**
  * Keeps the fewest skin influences per vertex whose displacement stays within `skinError` pixels over every baked frame, for each level
- * from the screen size at which it starts. `screenSizes` holds the starting screen size of the levels after the first one.
+ * from the screen size at which it starts. `screenSizes` holds the starting screen size of the levels after the first one; a positive
+ * `maxInfluences` of a level fixes its influences instead.
  */
-export function reduceSkin(lod: GeometryLOD, skin: SkinData | null, reducer: SkinReducer | null, screenSizes: number[], skinError: number, viewportHeight: number): DrawLevels {
+export function reduceSkin(lod: GeometryLOD, skin: SkinData | null, reducer: SkinReducer | null, levels: LevelSettings[], screenSizes: number[], skinError: number, viewportHeight: number): DrawLevels {
   const start = performance.now();
   const geometries = [lod.levels[0].geometry];
   const influences = [skin === null ? 0 : skin.influences];
@@ -97,6 +98,16 @@ export function reduceSkin(lod: GeometryLOD, skin: SkinData | null, reducer: Ski
     if (skin === null || reducer === null) {
       geometries.push(geometry);
       influences.push(0);
+      continue;
+    }
+
+    const maxInfluences = levels[i - 1].maxInfluences;
+
+    if (maxInfluences > 0) {
+      const reduced = maxInfluences < skin.influences ? reducer.reduceTo(i, maxInfluences) : null;
+
+      geometries.push(reduced?.geometry ?? geometry);
+      influences.push(reduced?.influences ?? countInfluences(geometry));
       continue;
     }
 
@@ -131,31 +142,12 @@ export function getVertices(geometry: BufferGeometry): number {
 
 function getBaseParams(settings: Settings): SimplifyGeometryLODParams {
   const params: SimplifyGeometryLODParams = { vertices: settings.vertices };
-  const attributes = getAttributeWeights(settings);
   const protectSeams = getProtectSeams(settings);
 
   if (settings.errorAbsolute) params.errorAbsolute = true;
-  if (attributes !== undefined) params.attributes = attributes;
   if (protectSeams.length > 0) params.protectSeams = protectSeams;
 
   return params;
-}
-
-function getAttributeWeights(settings: Settings): AttributeWeights | undefined {
-  const weights: AttributeWeights = {};
-  let hasWeights = false;
-
-  if (settings.normalWeight > 0) {
-    weights['normal'] = settings.normalWeight;
-    hasWeights = true;
-  }
-
-  if (settings.uvWeight > 0) {
-    weights['uv'] = settings.uvWeight;
-    hasWeights = true;
-  }
-
-  return hasWeights ? weights : undefined;
 }
 
 function getProtectSeams(settings: Settings): string[] {

@@ -10,17 +10,22 @@ interface CodeOptions {
   hasHysteresis: boolean;
   isSkinned: boolean;
   reducesSkin: boolean;
+  hasFixedInfluences: boolean;
+  hasNearestFrames: boolean;
 }
 
 export function generateCode(settings: Settings, model: Model): string {
   const levels = getLevels(settings);
+  const hasFixedInfluences = model.skin !== null && levels.some((level) => level.maxInfluences > 0);
   const options: CodeOptions = {
     ts: settings.language === 'ts',
     isPixelError: settings.thresholdMode === 'pixelError',
     isDistance: settings.thresholdMode === 'distance',
     hasHysteresis: levels.some((level) => level.hysteresis > 0),
     isSkinned: model.skin !== null,
-    reducesSkin: model.skin !== null && settings.skinError > 0
+    reducesSkin: model.skin !== null && (settings.skinError > 0 || hasFixedInfluences),
+    hasFixedInfluences,
+    hasNearestFrames: model.skin !== null && levels.some((level) => !level.interpolateFrames)
   };
   const lines: string[] = [];
   const sharedFlags = getSharedFlags(levels);
@@ -53,6 +58,8 @@ export function generateJson(settings: Settings, model: Model): string {
   if (settings.thresholdMode === 'distance') config['distances'] = levels.map((level) => level.distance);
   if (levels.some((level) => level.hysteresis > 0)) config['hysteresis'] = levels.map((level) => level.hysteresis);
   if (model.skin !== null && settings.skinError > 0) config['maxSkinError'] = settings.skinError;
+  if (model.skin !== null && levels.some((level) => level.maxInfluences > 0)) config['maxInfluences'] = levels.map((level) => level.maxInfluences);
+  if (model.skin !== null && levels.some((level) => !level.interpolateFrames)) config['interpolateFrames'] = levels.map((level) => level.interpolateFrames);
 
   return JSON.stringify(config, null, 2)
     .replace(/\{\n\s+([^{}[\]]*?)\n\s*\}/g, (_match, body: string) => `{ ${body.split(/,\n\s+/).join(', ')} }`)
@@ -88,6 +95,8 @@ function getConstants(settings: Settings, options: CodeOptions): string[] {
   if (settings.thresholdMode === 'screenSize') lines.push(`const screenSizes = [${levels.map((level) => formatNumber(level.screenSize)).join(', ')}];`);
   if (options.isDistance) lines.push(`const distances = [${levels.map((level) => formatNumber(level.distance)).join(', ')}];`);
   if (options.hasHysteresis) lines.push(`const hysteresis = [${levels.map((level) => formatNumber(level.hysteresis)).join(', ')}];`);
+  if (options.hasNearestFrames) lines.push(`const interpolateFrames = [${levels.map((level) => String(level.interpolateFrames)).join(', ')}];`);
+  if (options.hasFixedInfluences) lines.push(`const maxInfluences = [${levels.map((level) => String(level.maxInfluences)).join(', ')}];`);
   if (options.reducesSkin) lines.push(`const maxSkinError = ${formatNumber(settings.skinError)};`);
 
   return lines;
@@ -141,7 +150,8 @@ function getScreenSizeScale(settings: Settings, ts: boolean): string[] {
 
 function getLoopBody(settings: Settings, options: CodeOptions): string[] {
   const lines: string[] = [];
-  const hysteresis = options.hasHysteresis ? ', hysteresis[i - 1]' : '';
+  const hysteresisValue = options.hasHysteresis ? ', hysteresis[i - 1]' : '';
+  const lodArguments = options.hasNearestFrames ? `${hysteresisValue === '' ? ', 0' : hysteresisValue}, { interpolateFrames: interpolateFrames[i - 1] }` : hysteresisValue;
 
   if (options.isPixelError) {
     lines.push('    const metric = screenSizeScale / lods[i].error;', '', '    if (!(metric < lastMetric)) continue;', '', '    lastMetric = metric;');
@@ -150,18 +160,21 @@ function getLoopBody(settings: Settings, options: CodeOptions): string[] {
   }
 
   if (!options.reducesSkin) {
-    lines.push(`    mesh.addLOD(lods[i].geometry, material, metric${hysteresis});`);
+    lines.push(`    mesh.addLOD(lods[i].geometry, material, metric${lodArguments});`);
 
     return lines;
   }
 
   const screenSize = options.isDistance ? 'radius / (metric * Math.tan((fov * Math.PI) / 360))' : 'metric';
+  const skinOptions = options.hasFixedInfluences
+    ? '{ error: maxInfluences[i - 1] > 0 ? 0 : maxSkinError / (screenSize * viewportHeight), maxInfluences: maxInfluences[i - 1] > 0 ? maxInfluences[i - 1] : 4, bindMatrix: skin.bindMatrix }'
+    : '{ error: maxSkinError / (screenSize * viewportHeight), bindMatrix: skin.bindMatrix }';
 
   lines.push(
     `    const screenSize = ${screenSize};`,
-    '    const reduced = reduceSkinInfluences(lods[i].geometry, skin.bake, { error: maxSkinError / (screenSize * viewportHeight), bindMatrix: skin.bindMatrix });',
+    `    const reduced = reduceSkinInfluences(lods[i].geometry, skin.bake, ${skinOptions});`,
     '',
-    `    mesh.addLOD(reduced.geometry, material, metric${hysteresis});`
+    `    mesh.addLOD(reduced.geometry, material, metric${lodArguments});`
   );
 
   return lines;

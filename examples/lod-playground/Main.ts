@@ -9,8 +9,8 @@ import { Inspector } from './Inspector.js';
 import { LevelsPanel } from './LevelsPanel.js';
 import { LODPreview } from './LODPreview.js';
 import { disposeModel, initModelLoaders, loadModel, loadModelFile, type Model } from './Models.js';
-import { createModelSettings, createNextLevel, getLevels, maxLevels, modelLabels, type LevelSettings, type ModelName } from './Settings.js';
-import { importSettings, readSettingsFromUrl, writeSettingsToUrl } from './SettingsIO.js';
+import { createDefaultSettings, createModelSettings, createNextLevel, getLevels, maxLevels, modelLabels, type LevelSettings, type ModelName, type Settings } from './Settings.js';
+import { importSettings, readInitialSettings, saveSettings } from './SettingsIO.js';
 import { disposeLOD, reduceSkin, simplifyGeometry, type DrawLevels, type GeometryLOD } from './Simplification.js';
 import { SkinReducer } from './SkinReducer.js';
 import { randomClip, type Snapshot, type ViewState } from './State.js';
@@ -51,7 +51,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
 initTooltips(getElement('tooltip'));
 
-const settings = readSettingsFromUrl();
+const settings = readInitialSettings();
 
 if (settings.model === 'custom') settings.model = 'imp';
 
@@ -78,11 +78,11 @@ controls.maxPolarAngle = Math.PI / 2 - 0.02;
 controls.screenSpacePanning = false;
 controls.addEventListener('change', requestRender);
 
-const toolbar = new Toolbar(getElement('toolbar'), settings, view, { onModel: (name) => void selectModel(name), onOpenFile: (file) => void openModelFile(file), onPlay: togglePlay, onClip: selectClip, onImport, onUndo: undo, onRedo: redo });
+const toolbar = new Toolbar(getElement('toolbar'), settings, view, { onModel: (name) => void selectModel(name), onOpenFile: (file) => void openModelFile(file), onPlay: togglePlay, onClip: selectClip, onImport, onUndo: undo, onRedo: redo, onReset });
 const viewportBar = new ViewportBar(getElement('viewport-bar'), settings, view, { onChange: scheduleUpdate, onHighlight: updateHighlight, onResetCamera: resetCamera });
 const levelsPanel = new LevelsPanel(getElement('levels-dock'), settings, view, { onSelect: selectLevel, onHover: hoverLevel, onAdd: addLevel, onRemove: removeLevel });
 const dock = new BottomDock(getElement('bottom-dock'), settings, view, { onSelect: selectLevel, onHover: hoverLevel, onLanguage });
-const inspector = new Inspector(getElement('inspector'), settings, view, scheduleUpdate);
+const inspector = new Inspector(getElement('inspector'), levelsPanel.settingsContainer, settings, view, scheduleUpdate);
 
 preview.onStats = (stats) => {
   levelsPanel.renderStats(stats);
@@ -268,7 +268,7 @@ function update(): void {
 
   if (model === undefined) return;
 
-  writeSettingsToUrl(settings);
+  saveSettings(settings);
   recordHistory();
 
   try {
@@ -301,7 +301,7 @@ function createSnapshot(model: Model): Snapshot {
   const draw = getDrawLevels(model, lodCache!, screenSizes);
   const warnings = [...getSettingsWarnings(settings, model), ...getResultWarnings(lod, used, settings)];
 
-  return { model, lod, draw, thresholds, used, field: getFieldLayout(lod, thresholds, settings, camera.fov), fov: camera.fov, warnings };
+  return { model, lod, draw, thresholds, used, field: getFieldLayout(lod, settings, camera.fov), fov: camera.fov, warnings };
 }
 
 /**
@@ -309,8 +309,8 @@ function createSnapshot(model: Model): Snapshot {
  */
 function getLOD(model: Model, levels: LevelSettings[]): GeometryLOD {
   const key = JSON.stringify([
-    model.id, settings.vertices, settings.errorAbsolute, settings.normalWeight, settings.uvWeight, settings.protectNormalSeams, settings.protectUvSeams,
-    levels.map((level) => ({ ...level, screenSize: 0, distance: 0, hysteresis: 0 }))
+    model.id, settings.vertices, settings.errorAbsolute, settings.protectNormalSeams, settings.protectUvSeams,
+    levels.map((level) => ({ ...level, maxInfluences: 0, interpolateFrames: true, screenSize: 0, distance: 0, hysteresis: 0 }))
   ]);
 
   if (lodCache?.key === key) return lodCache.lod;
@@ -334,11 +334,11 @@ function getLOD(model: Model, levels: LevelSettings[]): GeometryLOD {
  * Returns the geometries drawn for each level, reducing the skin influences again only when the levels or their switch points change.
  */
 function getDrawLevels(model: Model, cache: LODCache, screenSizes: number[]): DrawLevels {
-  const key = model.skin === null ? '' : JSON.stringify([screenSizes, settings.skinError, viewportHeight]);
+  const key = model.skin === null ? '' : JSON.stringify([screenSizes, getLevels(settings).map((level) => level.maxInfluences), settings.skinError, viewportHeight]);
 
   if (drawCache !== null && drawCache.lod === cache.lod && drawCache.key === key) return drawCache.draw;
 
-  const draw = reduceSkin(cache.lod, model.skin, cache.reducer, screenSizes, settings.skinError, viewportHeight);
+  const draw = reduceSkin(cache.lod, model.skin, cache.reducer, getLevels(settings), screenSizes, settings.skinError, viewportHeight);
 
   drawCache = { key, lod: cache.lod, draw };
 
@@ -347,7 +347,7 @@ function getDrawLevels(model: Model, cache: LODCache, screenSizes: number[]): Dr
 
 function buildPreview(current: Snapshot): void {
   const levels = getLevels(settings);
-  const key = JSON.stringify([current.thresholds, current.used, levels.map((level) => level.hysteresis), settings.layout, settings.shading, view.forcedLevel]);
+  const key = JSON.stringify([current.thresholds, current.used, levels.map((level) => [level.hysteresis, level.interpolateFrames]), settings.instances, settings.spread, settings.environment, settings.layout, settings.shading, view.forcedLevel]);
   const geometries = current.draw.geometries;
   const isSameGeometries = geometries.length === builtGeometries.length && geometries.every((geometry, i) => geometry === builtGeometries[i]);
 
@@ -361,9 +361,9 @@ function buildPreview(current: Snapshot): void {
 
   preview.setColorByLevel(settings.colorByLevel);
   preview.setFlatShading(settings.flatShading);
-  preview.setHighlightedLevel(getHighlightedLevel(), view.hoveredLevel >= 0 || view.isolate);
+  preview.setHighlightedLevel(getHighlightedLevel());
 
-  const nextCameraKey = JSON.stringify([current.model.id, settings.layout, current.lod.levels.length]);
+  const nextCameraKey = JSON.stringify([current.model.id, settings.layout, current.lod.levels.length, settings.instances, settings.spread]);
 
   if (nextCameraKey === cameraKey) return;
 
@@ -400,14 +400,19 @@ function hoverLevel(level: number): void {
 }
 
 function updateHighlight(): void {
-  preview.setHighlightedLevel(getHighlightedLevel(), view.hoveredLevel >= 0 || view.isolate);
+  viewportBar.setSelectedLevel(view.selectedLevel);
+  preview.setHighlightedLevel(getHighlightedLevel());
   requestRender();
 }
 
+/**
+ * Returns the level whose instances stay lit while the others are dimmed: the hovered level, or the selected one while isolated.
+ * Selecting a level alone dims nothing, so that the drawn colors and textures stay true.
+ */
 function getHighlightedLevel(): number {
   if (view.hoveredLevel >= 0) return view.hoveredLevel;
 
-  return view.selectedLevel;
+  return view.isolate ? view.selectedLevel : -1;
 }
 
 function addLevel(): void {
@@ -442,7 +447,7 @@ function selectClip(clip: number): void {
 }
 
 function onLanguage(): void {
-  writeSettingsToUrl(settings);
+  saveSettings(settings);
   recordHistory();
 
   if (snapshot !== null) dock.renderCode(snapshot);
@@ -454,17 +459,17 @@ function recordHistory(): void {
 }
 
 function undo(): void {
-  if (history.undo()) applyHistory();
+  if (history.undo()) showSettings();
 }
 
 function redo(): void {
-  if (history.redo()) applyHistory();
+  if (history.redo()) showSettings();
 }
 
 /**
- * Shows the settings restored by undo or redo in every panel.
+ * Shows in every panel the settings replaced by undo, redo or import.
  */
-function applyHistory(): void {
+function showSettings(): void {
   const model = models.get(settings.model);
 
   viewportBar.sync();
@@ -491,16 +496,35 @@ function onHistoryKey(event: KeyboardEvent): void {
   }
 }
 
+/**
+ * Replaces the settings with the imported ones as one change of the current model, so that undo restores them, then shows the
+ * imported model.
+ */
 function onImport(text: string): void {
+  let imported: Settings;
+
   try {
-    writeSettingsToUrl(importSettings(text));
+    imported = importSettings(text);
   } catch (error) {
     showError(error);
 
     return;
   }
 
-  window.location.reload();
+  const model = imported.model;
+
+  Object.assign(settings, imported, { model: settings.model });
+  showSettings();
+
+  if (model !== settings.model) void selectModel(model);
+}
+
+/**
+ * Restores every setting to its default, keeping the current model, as one change that undo reverts.
+ */
+function onReset(): void {
+  Object.assign(settings, createDefaultSettings(), { model: settings.model });
+  showSettings();
 }
 
 function showError(error: unknown): void {

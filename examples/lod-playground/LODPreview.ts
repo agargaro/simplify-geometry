@@ -7,6 +7,7 @@ import {
   GridHelper,
   type Material,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   type PerspectiveCamera,
   RepeatWrapping,
@@ -48,13 +49,14 @@ export const levelColors = ['#9aa3ad', '#4fd1a5', '#b78cff', '#e86fd0', '#a8d65a
 
 const dimColor = new Color('#2c2f35');
 const strongDim = 0.72;
-const lightDim = 0.45;
 const plainColor = new Color('#c4c7ce');
 const noLevel = -1;
 const uncolored = 254;
 const checkerSize = 512;
 const checkerCells = 8;
 const clipSeed = 0.5;
+const gridDivisions: [number, number] = [8, 160];
+const farScale = 8;
 
 /**
  * Returns the shading drawn for the model: `shading`, or clay when the model does not support it.
@@ -68,15 +70,14 @@ export class LODPreview {
   private readonly scene: Scene;
   private readonly clayMaterial = new MeshStandardMaterial({ metalness: 0.05, roughness: 0.62 });
   private readonly uvMaterial = new MeshStandardMaterial({ map: createCheckerTexture(), metalness: 0, roughness: 0.8 });
+  private readonly wireframeMaterial = new MeshBasicMaterial({ wireframe: true });
   private readonly levelColors = levelColors.map((color) => new Color(color));
   private readonly dimmedColors = levelColors.map((color) => new Color(color).lerp(dimColor, strongDim));
-  private readonly softColors = levelColors.map((color) => new Color(color).lerp(dimColor, lightDim));
-  private readonly softPlainColor = plainColor.clone().lerp(dimColor, lightDim);
-  private readonly whiteColors = [new Color('white'), new Color('white').lerp(dimColor, lightDim), new Color('white').lerp(dimColor, strongDim)];
+  private readonly whiteColors = [new Color('white'), new Color('white').lerp(dimColor, strongDim)];
   private material: Material = this.clayMaterial;
   private isClay = true;
   private environment: Texture | null = null;
-  private readonly grid = new GridHelper(1, 1, '#33363d', '#202227');
+  private grid = createGrid(gridDivisions[0]);
   private readonly morphTarget = new Mesh();
   private meshes: InstancedMesh2[] = [];
   private input: PreviewInput | null = null;
@@ -87,7 +88,6 @@ export class LODPreview {
   private stats: PreviewStats = { instancesPerLevel: new Uint32Array(1), drawnTriangles: 0, fullTriangles: 0 };
   private colorByLevel = true;
   private highlightedLevel = noLevel;
-  private isolate = false;
   private time = 0;
   private clip = randomClip;
   private getView: (camera: PerspectiveCamera) => DefaultView = getEmptyView;
@@ -110,8 +110,8 @@ export class LODPreview {
 
     this.stats = { instancesPerLevel: new Uint32Array(levelsCount), drawnTriangles: 0, fullTriangles: 0 };
     this.material = this.getMaterial(input.model, getDrawnShading(input.model, input.settings.shading));
-    this.isClay = this.material === this.clayMaterial;
-    this.scene.environment = this.material === input.model.material ? this.environment : null;
+    this.isClay = this.material === this.clayMaterial || this.material === this.wireframeMaterial;
+    this.scene.environment = input.settings.environment && this.material === input.model.material ? this.environment : null;
     this.setMaterialShading(input.settings.flatShading || input.model.morph !== null);
 
     if (input.settings.layout === 'levels') this.buildLevelsLayout(input);
@@ -141,13 +141,12 @@ export class LODPreview {
   }
 
   /**
-   * Dims the instances that do not draw `level`: lightly to mark the selection, strongly to isolate it. -1 dims nothing.
+   * Dims the instances that do not draw `level`. -1 dims nothing.
    */
-  setHighlightedLevel(level: number, isolate: boolean): void {
-    if (level === this.highlightedLevel && isolate === this.isolate) return;
+  setHighlightedLevel(level: number): void {
+    if (level === this.highlightedLevel) return;
 
     this.highlightedLevel = level;
-    this.isolate = isolate;
     this.instanceColors.fill(uncolored);
   }
 
@@ -208,11 +207,12 @@ export class LODPreview {
 
     this.levelMap = [isForced ? forcedLevel : 0];
 
-    if (!isForced) {
+    if (isForced) mesh.interpolateFrames = forcedLevel === 0 || levels[forcedLevel - 1].interpolateFrames;
+    else {
       for (let i = 1; i < geometries.length; i++) {
         if (!used[i - 1]) continue;
 
-        mesh.addLOD(geometries[i], this.material, thresholds[i - 1], levels[i - 1].hysteresis);
+        mesh.addLOD(geometries[i], this.material, thresholds[i - 1], levels[i - 1].hysteresis, { interpolateFrames: levels[i - 1].interpolateFrames });
         this.levelMap.push(i);
       }
     }
@@ -223,13 +223,16 @@ export class LODPreview {
 
     this.setupInstances(mesh, count, -1);
     this.meshes = [mesh];
-    this.updateGrid(field.depth, radius);
-    this.grid.visible = true;
+
+    const size = Math.max(field.depth * 2.2, radius * 12);
+
+    this.setGrid(size, radius * settings.spread, -size / 2 + radius * 4);
     this.getView = () => getOverheadView(center.y, field);
   }
 
   private buildLevelsLayout(input: PreviewInput): void {
-    const { lod, geometries } = input;
+    const { lod, geometries, settings } = input;
+    const levels = settings.models[settings.model].levels;
     const radius = lod.radius;
     const center = lod.levels[0].geometry.boundingSphere!.center;
     const spacing = radius * instanceSpacing;
@@ -241,6 +244,7 @@ export class LODPreview {
     for (let level = 0; level < count; level++) {
       const mesh = this.createMesh(geometries[level], 1, false);
 
+      mesh.interpolateFrames = level === 0 || levels[level - 1].interpolateFrames;
       mesh.addInstances(1, (instance) => {
         instance.position.set(getColumnX(level, count, spacing) - center.x, 0, -center.z);
       });
@@ -249,9 +253,7 @@ export class LODPreview {
       this.meshes.push(mesh);
     }
 
-    this.grid.visible = true;
-    this.grid.scale.setScalar(Math.max(count * spacing * 1.6, radius * 8));
-    this.grid.position.set(0, 0, 0);
+    this.setGrid(Math.max(count * spacing * 1.6, radius * 8), radius, 0);
     this.getView = (camera) => getRowView(count * spacing, center.y, radius, camera);
   }
 
@@ -362,10 +364,9 @@ export class LODPreview {
   }
 
   private updateInstanceColor(mesh: InstancedMesh2, id: number, index: number, level: number): void {
-    const isDimmed = this.highlightedLevel !== noLevel && level !== this.highlightedLevel;
-    const dim = isDimmed ? (this.isolate ? 2 : 1) : 0;
+    const dim = this.highlightedLevel !== noLevel && level !== this.highlightedLevel ? 1 : 0;
     const byLevel = this.colorByLevel && this.isClay;
-    const slot = byLevel ? level * 3 + dim : dim;
+    const slot = byLevel ? level * 2 + dim : dim;
 
     if (this.instanceColors[index] === slot) return;
 
@@ -377,6 +378,7 @@ export class LODPreview {
     if (shading === 'material') return model.material;
     if (shading === 'texture') return model.textureMaterial!;
     if (shading === 'clay') return this.clayMaterial;
+    if (shading === 'wireframe') return this.wireframeMaterial;
 
     this.uvMaterial.side = model.material.side;
 
@@ -386,11 +388,11 @@ export class LODPreview {
   private getLevelColor(level: number, dim: number): Color {
     const index = level % this.levelColors.length;
 
-    return dim === 2 ? this.dimmedColors[index] : dim === 1 ? this.softColors[index] : this.levelColors[index];
+    return dim === 1 ? this.dimmedColors[index] : this.levelColors[index];
   }
 
   private getPlainColor(dim: number): Color {
-    return dim === 2 ? dimColor : dim === 1 ? this.softPlainColor : plainColor;
+    return dim === 1 ? dimColor : plainColor;
   }
 
   private setMaterialShading(flatShading: boolean): void {
@@ -408,11 +410,22 @@ export class LODPreview {
     this.stats.fullTriangles = 0;
   }
 
-  private updateGrid(depth: number, radius: number): void {
-    const size = Math.max(depth * 2.2, radius * 12);
+  /**
+   * Shows a ground grid `size` wide centered at `z`, with cells close to `cellSize`, rebuilding it when its division count changes.
+   */
+  private setGrid(size: number, cellSize: number, z: number): void {
+    const divisions = Math.min(Math.max(Math.round(size / cellSize), gridDivisions[0]), gridDivisions[1]);
 
+    if (divisions !== this.grid.userData['divisions']) {
+      this.scene.remove(this.grid);
+      this.grid.dispose();
+      this.grid = createGrid(divisions);
+      this.scene.add(this.grid);
+    }
+
+    this.grid.visible = true;
     this.grid.scale.setScalar(size);
-    this.grid.position.set(0, 0, -size / 2 + radius * 4);
+    this.grid.position.set(0, 0, z);
   }
 }
 
@@ -425,7 +438,7 @@ function getOverheadView(centerY: number, field: FieldLayout): DefaultView {
   return {
     position: new Vector3(0, height, 0),
     target: new Vector3(0, centerY, -field.height / Math.tan(field.pitch)),
-    far: Math.hypot(field.depth, height) * 2
+    far: Math.hypot(field.depth, height) * farScale
   };
 }
 
@@ -436,7 +449,7 @@ function getRowView(width: number, centerY: number, radius: number, camera: Pers
   return {
     position: new Vector3(0, centerY + radius * 0.35, distance),
     target: new Vector3(0, centerY, 0),
-    far: distance * 6
+    far: distance * farScale * 4
   };
 }
 
@@ -485,6 +498,14 @@ function getEmptyView(): DefaultView {
 
 function getColumnX(column: number, columns: number, spacing: number): number {
   return (column - (columns - 1) / 2) * spacing;
+}
+
+function createGrid(divisions: number): GridHelper {
+  const grid = new GridHelper(1, divisions, '#3a3d45', '#24262c');
+
+  grid.userData['divisions'] = divisions;
+
+  return grid;
 }
 
 function random(seed: number): number {

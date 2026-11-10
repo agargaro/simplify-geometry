@@ -1,20 +1,25 @@
 import { createChoice, createElement, createFlag, createNumberField, createSection, createToggle } from './Controls.js';
 import { levelColors } from './LODPreview.js';
 import type { Model } from './Models.js';
-import { getLevels, simplifyFlags, type LevelSettings, type Settings, type ThresholdMode, type VerticesMode } from './Settings.js';
+import { getLevels, instancesRange, simplifyFlags, spreadRange, type LevelSettings, type Settings, type ThresholdMode, type VerticesMode } from './Settings.js';
 import { canUpdateVertices, getTriangles, getVertices } from './Simplification.js';
 import type { ViewState } from './State.js';
 import { descriptions, flagDescriptions } from './Tooltips.js';
 
+/**
+ * Edits the settings: the selected level and the simplification in the inspector, the switch and the scene under the levels list.
+ */
 export class Inspector {
   private readonly container: HTMLElement;
+  private readonly globalContainer: HTMLElement;
   private readonly settings: Settings;
   private readonly view: ViewState;
   private readonly onChange: () => void;
   private model: Model | null = null;
 
-  constructor(container: HTMLElement, settings: Settings, view: ViewState, onChange: () => void) {
+  constructor(container: HTMLElement, globalContainer: HTMLElement, settings: Settings, view: ViewState, onChange: () => void) {
     this.container = container;
+    this.globalContainer = globalContainer;
     this.settings = settings;
     this.view = view;
     this.onChange = onChange;
@@ -22,11 +27,14 @@ export class Inspector {
 
   render(model: Model): void {
     const scrollTop = this.container.scrollTop;
+    const globalScrollTop = this.globalContainer.scrollTop;
     const active = document.activeElement;
-    const focusKey = active instanceof HTMLElement && this.container.contains(active) ? active.dataset['key'] : undefined;
+    const focusKey = active instanceof HTMLElement ? active.dataset['key'] : undefined;
+    const focusContainer = active instanceof HTMLElement && this.globalContainer.contains(active) ? this.globalContainer : this.container;
 
     this.model = model;
     this.container.replaceChildren();
+    this.globalContainer.replaceChildren();
 
     const levels = getLevels(this.settings);
     const selected = Math.min(this.view.selectedLevel, levels.length);
@@ -34,11 +42,13 @@ export class Inspector {
     if (selected === 0) this.renderSource(model);
     else this.renderLevel(levels[selected - 1], selected);
 
-    this.renderSwitch();
-    this.renderShared(model);
+    this.renderShared();
+    this.renderSwitch(this.globalContainer);
+    this.renderScene(this.globalContainer);
     this.container.scrollTop = scrollTop;
+    this.globalContainer.scrollTop = globalScrollTop;
 
-    if (focusKey !== undefined) this.container.querySelector<HTMLElement>(`[data-key="${CSS.escape(focusKey)}"]`)?.focus();
+    if (focusKey !== undefined) focusContainer.querySelector<HTMLElement>(`[data-key="${CSS.escape(focusKey)}"]`)?.focus();
   }
 
   private rerender(): void {
@@ -107,6 +117,31 @@ export class Inspector {
       }
     });
 
+    const skin = this.model?.skin ?? null;
+
+    if (skin !== null) {
+      const options = [{ value: 0, label: 'Auto' }];
+
+      for (let count = 1; count <= skin.influences; count++) options.push({ value: count, label: String(count) });
+
+      createChoice<number>(body, {
+        label: 'Bone influences',
+        tooltip: descriptions.maxInfluences,
+        value: Math.min(level.maxInfluences, skin.influences),
+        options,
+        onInput: (value) => {
+          level.maxInfluences = value;
+          this.onChange();
+        }
+      });
+      createToggle(body, {
+        label: 'Interpolate frames', tooltip: descriptions.interpolateFrames, checked: level.interpolateFrames, onInput: (checked) => {
+          level.interpolateFrames = checked;
+          this.onChange();
+        }
+      });
+    }
+
     if (settings.thresholdMode === 'screenSize') {
       createNumberField(body, {
         label: 'Screen size', tooltip: descriptions.screenSize, value: level.screenSize, min: 0.001, max: 1, step: 0.001, onInput: (value) => {
@@ -149,8 +184,8 @@ export class Inspector {
     }
   }
 
-  private renderSwitch(): void {
-    const body = createSection(this.container, 'Switch');
+  private renderSwitch(parent: HTMLElement): void {
+    const body = createSection(parent, 'Switch');
     const settings = this.settings;
 
     createChoice<ThresholdMode>(body, {
@@ -167,17 +202,26 @@ export class Inspector {
       }
     });
 
-    if (settings.thresholdMode !== 'pixelError') return;
+    if (settings.thresholdMode === 'pixelError') {
+      createNumberField(body, {
+        label: 'Max error (px)', tooltip: descriptions.pixelError, value: settings.pixelError, min: 0.1, max: 16, step: 0.1, onInput: (value) => {
+          settings.pixelError = value;
+          this.onChange();
+        }
+      });
+    }
+
+    if (this.model?.skin == null) return;
 
     createNumberField(body, {
-      label: 'Max error (px)', tooltip: descriptions.pixelError, value: settings.pixelError, min: 0.1, max: 16, step: 0.1, onInput: (value) => {
-        settings.pixelError = value;
+      label: 'Skin error (px)', tooltip: descriptions.skinError, value: settings.skinError, min: 0, max: 8, step: 0.1, onInput: (value) => {
+        settings.skinError = value;
         this.onChange();
       }
     });
   }
 
-  private renderShared(model: Model): void {
+  private renderShared(): void {
     const body = createSection(this.container, 'All levels');
     const settings = this.settings;
 
@@ -201,18 +245,6 @@ export class Inspector {
         this.onChange();
       }
     });
-    createNumberField(body, {
-      label: 'Normal weight', tooltip: descriptions.normalWeight, value: settings.normalWeight, min: 0, max: 2, step: 0.01, onInput: (value) => {
-        settings.normalWeight = value;
-        this.onChange();
-      }
-    });
-    createNumberField(body, {
-      label: 'UV weight', tooltip: descriptions.uvWeight, value: settings.uvWeight, min: 0, max: 2, step: 0.01, onInput: (value) => {
-        settings.uvWeight = value;
-        this.onChange();
-      }
-    });
     createToggle(body, {
       label: 'Protect normal seams', tooltip: descriptions.protectNormalSeams, checked: settings.protectNormalSeams, onInput: (checked) => {
         settings.protectNormalSeams = checked;
@@ -225,16 +257,38 @@ export class Inspector {
         this.onChange();
       }
     });
+  }
 
-    if (model.skin === null) return;
+  private renderScene(parent: HTMLElement): void {
+    const body = createSection(parent, 'Scene');
+    const settings = this.settings;
 
     createNumberField(body, {
-      label: 'Skin error (px)', tooltip: descriptions.skinError, value: settings.skinError, min: 0, max: 8, step: 0.1, onInput: (value) => {
-        settings.skinError = value;
+      label: 'Instances', tooltip: descriptions.instances, value: settings.instances, min: instancesRange[0], max: instancesRange[1], step: 50, onInput: (value) => {
+        settings.instances = clampCount(value, instancesRange);
+        this.onChange();
+      }
+    });
+    createNumberField(body, {
+      label: 'Spread (radii)', tooltip: descriptions.spread, value: settings.spread, min: spreadRange[0], max: spreadRange[1], step: 0.1, onInput: (value) => {
+        settings.spread = value;
+        this.onChange();
+      }
+    });
+    createToggle(body, {
+      label: 'Environment', tooltip: descriptions.environment, checked: settings.environment, onInput: (checked) => {
+        settings.environment = checked;
         this.onChange();
       }
     });
   }
+}
+
+/**
+ * Returns `value` rounded to an integer, inside `range`.
+ */
+function clampCount(value: number, range: [number, number]): number {
+  return Math.min(Math.max(Math.round(value), range[0]), range[1]);
 }
 
 function createFacts(rows: [string, string][]): HTMLElement {

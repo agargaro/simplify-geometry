@@ -15,7 +15,7 @@ export function getSettingsWarnings(settings: Settings, model: Model): Warning[]
   for (let i = 0; i < levels.length; i++) {
     const level = levels[i];
     const number = i + 1;
-    const ignored = getIgnoredBySloppy(level, settings);
+    const ignored = getIgnoredBySloppy(level);
 
     if (!level.limitError && level.ratio === 0) warnings.push({ level: number, text: 'Set a ratio or enable the error limit.' });
     if (level.updateVertices && !canUpdateVertices(level, settings)) warnings.push({ level: number, text: 'Update vertices needs compact vertices and no sloppy: it is ignored.' });
@@ -51,16 +51,8 @@ export function getResultWarnings(lod: GeometryLOD, used: boolean[], settings: S
   return warnings;
 }
 
-function getIgnoredBySloppy(level: LevelSettings, settings: Settings): string[] {
-  const ignored: string[] = [];
-
-  for (const flag of simplifyFlags) {
-    if (level[flag]) ignored.push(flag);
-  }
-
-  if (settings.normalWeight > 0 || settings.uvWeight > 0) ignored.push('the attribute weights');
-
-  return ignored;
+function getIgnoredBySloppy(level: LevelSettings): string[] {
+  return simplifyFlags.filter((flag) => level[flag]);
 }
 
 function addThresholdOrderWarnings(settings: Settings, levels: LevelSettings[], warnings: Warning[]): void {
