@@ -1,13 +1,15 @@
-import { generateCode } from './CodeGenerator.js';
-import { createChoice, createElement } from './Controls.js';
+import { generateCode, generateJson } from './CodeGenerator.js';
+import { createChoice, createElement, selectChoice } from './Controls.js';
 import { formatDistance } from './Format.js';
 import { icon } from './Icons.js';
 import { levelColors } from './LODPreview.js';
 import type { CodeLanguage, Settings } from './Settings.js';
 import type { Snapshot, ViewState } from './State.js';
 import { getSwitchDistance } from './Thresholds.js';
+import { descriptions } from './Tooltips.js';
 
-type DockTab = 'timeline' | 'code' | 'warnings';
+type DockTab = 'timeline' | 'code' | 'json' | 'warnings';
+type CodeTab = 'code' | 'json';
 
 export interface BottomDockCallbacks {
   onSelect: (level: number) => void;
@@ -22,10 +24,12 @@ interface Span {
 }
 
 const tabStorageKey = 'lod-playground-tab';
-const tabLabels: Record<DockTab, string> = { timeline: 'Distance', code: 'Code', warnings: 'Warnings' };
-const tabNames: DockTab[] = ['timeline', 'code', 'warnings'];
-const keywords = new Set(['import', 'from', 'export', 'function', 'const', 'let', 'return', 'for', 'if', 'continue', 'new', 'await', 'type', 'interface']);
-const tokenPattern = /('[^']*')|(\b\d+(?:\.\d+)?(?:e-?\d+)?\b)|(\b[A-Za-z_]\w*\b)/g;
+const tabLabels: Record<DockTab, string> = { timeline: 'Distance', code: 'InstancedMesh2', json: 'JSON', warnings: 'Warnings' };
+const tabNames: DockTab[] = ['timeline', 'code', 'json', 'warnings'];
+const codeTabs: CodeTab[] = ['code', 'json'];
+const languages: CodeLanguage[] = ['ts', 'js'];
+const keywords = new Set(['import', 'from', 'export', 'function', 'const', 'let', 'return', 'for', 'if', 'continue', 'new', 'await', 'type', 'interface', 'true', 'false']);
+const tokenPattern = /('[^']*'|"[^"]*")|(\b\d+(?:\.\d+)?(?:e-?\d+)?\b)|(\b[A-Za-z_]\w*\b)/g;
 
 export class BottomDock {
   private readonly settings: Settings;
@@ -39,10 +43,11 @@ export class BottomDock {
   private readonly track = createElement('div', 'timeline-track');
   private readonly ticks = createElement('div', 'timeline-rows');
   private readonly axis = createElement('div', 'timeline-axis');
-  private readonly code = createElement('code');
+  private readonly codes = new Map<CodeTab, HTMLElement>();
+  private readonly codeTexts = new Map<CodeTab, string>();
   private readonly warnings = createElement('ul', 'warning-list');
+  private language: HTMLElement | null = null;
   private spans: HTMLButtonElement[] = [];
-  private codeText = '';
   private active: DockTab = 'timeline';
 
   constructor(root: HTMLElement, settings: Settings, view: ViewState, callbacks: BottomDockCallbacks) {
@@ -53,7 +58,6 @@ export class BottomDock {
     const bar = createElement('div', 'tab-bar');
     const tabList = createElement('div', 'tab-list');
     const timeline = createElement('div', 'timeline');
-    const pre = createElement('pre', 'code');
 
     tabList.setAttribute('role', 'tablist');
     tabList.setAttribute('aria-label', 'Details');
@@ -82,16 +86,14 @@ export class BottomDock {
     }
 
     this.tabs.get('warnings')!.append(this.warningsCount);
-    bar.append(tabList, this.createTimelineTools(), this.createCodeTools());
+    bar.append(tabList, this.createTimelineTools(), this.createCodeTools('code', descriptions.codeTs), this.createCodeTools('json', descriptions.codeJson));
     timeline.append(this.track, this.ticks, this.axis);
     timeline.addEventListener('pointerleave', () => {
       callbacks.onHover(-1);
     });
     this.panels.get('timeline')!.append(timeline);
-    pre.append(this.code);
-    pre.tabIndex = 0;
-    pre.setAttribute('aria-label', 'Generated code');
-    this.panels.get('code')!.append(pre);
+    for (const tab of codeTabs) this.panels.get(tab)!.append(this.createCodeBlock(tab));
+
     this.panels.get('warnings')!.append(this.warnings);
     root.append(bar, ...this.panels.values());
     this.setTab(readStoredTab());
@@ -108,12 +110,34 @@ export class BottomDock {
   }
 
   renderCode(snapshot: Snapshot): void {
-    const text = generateCode(this.settings, snapshot.model);
+    this.setCode('code', generateCode(this.settings, snapshot.model));
+    this.setCode('json', generateJson(this.settings, snapshot.model));
+  }
 
-    if (text === this.codeText) return;
+  /**
+   * Shows the settings changed elsewhere, for example by undo.
+   */
+  sync(): void {
+    if (this.language !== null) selectChoice<CodeLanguage>(this.language, languages, this.settings.language);
+  }
 
-    this.codeText = text;
-    this.code.innerHTML = highlight(text);
+  private setCode(tab: CodeTab, text: string): void {
+    if (text === this.codeTexts.get(tab)) return;
+
+    this.codeTexts.set(tab, text);
+    this.codes.get(tab)!.innerHTML = highlight(text);
+  }
+
+  private createCodeBlock(tab: CodeTab): HTMLElement {
+    const pre = createElement('pre', 'code');
+    const code = createElement('code');
+
+    pre.append(code);
+    pre.tabIndex = 0;
+    pre.setAttribute('aria-label', tab === 'json' ? 'Generated JSON' : 'Generated code');
+    this.codes.set(tab, code);
+
+    return pre;
   }
 
   private setTab(name: DockTab): void {
@@ -162,26 +186,32 @@ export class BottomDock {
     return tools;
   }
 
-  private createCodeTools(): HTMLElement {
+  private createCodeTools(tab: CodeTab, description: string): HTMLElement {
     const tools = createElement('div', 'tab-tools');
+    const caption = createElement('span', 'tool-caption');
     const copy = createElement('button', 'tool-button');
 
-    createChoice<CodeLanguage>(tools, {
-      tooltip: 'Language of the generated code.',
-      value: this.settings.language,
-      options: [{ value: 'ts', label: 'TS' }, { value: 'js', label: 'JS' }],
-      onInput: (value) => {
-        this.settings.language = value;
-        this.callbacks.onLanguage();
-      }
-    });
+    caption.textContent = description;
+    tools.append(caption);
+
+    if (tab === 'code') {
+      this.language = createChoice<CodeLanguage>(tools, {
+        tooltip: 'Language of the generated code.',
+        value: this.settings.language,
+        options: [{ value: 'ts', label: 'TS' }, { value: 'js', label: 'JS' }],
+        onInput: (value) => {
+          this.settings.language = value;
+          this.callbacks.onLanguage();
+        }
+      });
+    }
 
     copy.type = 'button';
     copy.innerHTML = `${icon('copy')}<span>Copy</span>`;
-    copy.dataset['tooltip'] = 'Copies the generated code.';
-    copy.addEventListener('click', () => void copyText(this.codeText, copy));
+    copy.dataset['tooltip'] = tab === 'json' ? 'Copies the generated JSON.' : 'Copies the generated code.';
+    copy.addEventListener('click', () => void copyText(this.codeTexts.get(tab) ?? '', copy));
     tools.append(copy);
-    this.tools.set('code', tools);
+    this.tools.set(tab, tools);
 
     return tools;
   }
@@ -349,7 +379,7 @@ function readStoredTab(): DockTab {
   try {
     const value = localStorage.getItem(tabStorageKey);
 
-    return value === 'code' || value === 'warnings' ? value : 'timeline';
+    return value === 'code' || value === 'json' || value === 'warnings' ? value : 'timeline';
   } catch {
     return 'timeline';
   }

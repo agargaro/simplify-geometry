@@ -1,11 +1,11 @@
 ---
 version: 1
 slug: "lod-playground-html"
-primary_target: "lod-playground.html"
+primary_target: "index.html"
 related_targets: ["examples/lod-playground"]
 ---
 
-Scope: lod-playground.html, the single-mesh LOD playground. Visitor mode: Operate.
+Scope: index.html, the single-mesh LOD playground. Visitor mode: Operate.
 
 Audience and job: three.js developers on desktop tuning LOD levels of one mesh (Imp, Puglin, Horse) for InstancedMesh2, checking them at real switch distances, copying the code.
 

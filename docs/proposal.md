@@ -65,3 +65,14 @@ Proposal: optionally simplify each level from the previous one.
 
 - Faster, and with `updateVertices` it needs much less memory, because each level copies only the vertices of the previous level instead of the whole source.
 - Trade-off: errors accumulate across levels, so the error returned for a level is no longer measured against the source.
+
+## Per-level compact vertices
+
+Today `vertices` applies to every level: `reordered` and `shared` share one vertex buffer, `compact` gives every level its own. `updateVertices` requires `compact`, so using it on one coarse level forces every level to copy its vertices.
+
+Proposal: a per-level `vertices: 'compact'` in `SimplifyGeometryLevelParams`, valid with `vertices: 'reordered'` or `'shared'`. The compact levels get their own vertex buffer and can use `updateVertices`; the other levels keep sharing the buffer, reordered only on their index arrays.
+
+- The shared buffer keeps the size of the source, because level 0 uses every vertex: each compact level only adds its own vertices.
+- Measured with the default playground levels (errors 0.005, 0.01, 0.02, 0.04), compact uses 1.3 to 2.6 times the memory of reordered: Imp 1.45 MB against 0.77 MB, Puglin 0.49 MB against 0.31 MB, Horse 0.49 MB against 0.19 MB because it copies the morph targets into every level.
+- With error-limited levels, `updateVertices` did not change the triangle count or the returned error on these models, so the gain is visual only and must be verified before changing the API.
+- A compact level cannot be drawn by a `BatchedMesh` that expects one shared vertex buffer.

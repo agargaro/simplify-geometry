@@ -136,6 +136,15 @@ export function createFlag(parent: HTMLElement, options: ToggleOptions): void {
   parent.append(label);
 }
 
+/**
+ * Marks as pressed the button of `value` in a choice created by `createChoice` with its options in the order of `values`.
+ */
+export function selectChoice<T extends string | number>(choice: HTMLElement, values: readonly T[], value: T): void {
+  const buttons = choice.querySelectorAll('button.segment');
+
+  for (let i = 0; i < buttons.length; i++) buttons[i].setAttribute('aria-pressed', String(values[i] === value));
+}
+
 export function createChoice<T extends string | number>(parent: HTMLElement, options: ChoiceOptions<T>): HTMLElement {
   const group = createElement('div', 'segmented');
   const buttons: HTMLButtonElement[] = [];

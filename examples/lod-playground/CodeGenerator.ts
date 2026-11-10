@@ -37,6 +37,28 @@ export function generateCode(settings: Settings, model: Model): string {
   return lines.join('\n');
 }
 
+/**
+ * Returns the parameters of `simplifyGeometryLOD` and the values that choose when each level is drawn, as JSON.
+ */
+export function generateJson(settings: Settings, model: Model): string {
+  const levels = getLevels(settings);
+  const config: Record<string, unknown> = {
+    params: getSimplifyParams(settings, levels),
+    levels: getLevelParams(levels, getSharedFlags(levels), settings),
+    thresholdMode: settings.thresholdMode
+  };
+
+  if (settings.thresholdMode === 'pixelError') config['maxPixelError'] = settings.pixelError;
+  if (settings.thresholdMode === 'screenSize') config['screenSizes'] = levels.map((level) => level.screenSize);
+  if (settings.thresholdMode === 'distance') config['distances'] = levels.map((level) => level.distance);
+  if (levels.some((level) => level.hysteresis > 0)) config['hysteresis'] = levels.map((level) => level.hysteresis);
+  if (model.skin !== null && settings.skinError > 0) config['maxSkinError'] = settings.skinError;
+
+  return JSON.stringify(config, null, 2)
+    .replace(/\{\n\s+([^{}[\]]*?)\n\s*\}/g, (_match, body: string) => `{ ${body.split(/,\n\s+/).join(', ')} }`)
+    .replace(/\[\n\s+([^{}[\]]*?)\n\s*\]/g, (_match, body: string) => `[${body.split(/,\n\s+/).join(', ')}]`);
+}
+
 function getImports(settings: Settings, options: CodeOptions): string[] {
   const instancedImports = ['InstancedMesh2'];
   const simplifyImports = ['simplifyGeometryLOD', 'simplifyReady'];

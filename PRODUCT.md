@@ -15,7 +15,7 @@ real switch distances, and copy the generated code into their project.
 ## Product Purpose
 
 `@three.ez/simplify-geometry` simplifies three.js `BufferGeometry` and generates LOD levels with meshoptimizer.
-The LOD playground (`lod-playground.html`, published on GitHub Pages) makes the parameters tangible: success means the developer
+The LOD playground (`index.html`, the GitHub Pages homepage) makes the parameters tangible: success means the developer
 leaves with levels that look right at the distances where they switch, and with code that reproduces them.
 
 ## Operating Context

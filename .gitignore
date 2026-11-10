@@ -3,3 +3,6 @@ build/
 .cache/
 *.tgz
 site/
+.impeccable/config.local.json
+.impeccable/questions/
+.impeccable/review/

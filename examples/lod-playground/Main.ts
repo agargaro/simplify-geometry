@@ -4,6 +4,7 @@ import { AmbientLight, type BufferGeometry, Color, DirectionalLight, Perspective
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { BottomDock } from './BottomDock.js';
+import { History } from './History.js';
 import { Inspector } from './Inspector.js';
 import { LevelsPanel } from './LevelsPanel.js';
 import { LODPreview } from './LODPreview.js';
@@ -12,7 +13,7 @@ import { createModelSettings, createNextLevel, getLevels, maxLevels, modelLabels
 import { importSettings, readSettingsFromUrl, writeSettingsToUrl } from './SettingsIO.js';
 import { disposeLOD, reduceSkin, simplifyGeometry, type DrawLevels, type GeometryLOD } from './Simplification.js';
 import { SkinReducer } from './SkinReducer.js';
-import type { Snapshot, ViewState } from './State.js';
+import { randomClip, type Snapshot, type ViewState } from './State.js';
 import { getFieldLayout, getSwitchScreenSize, getThresholds, getUsedLevels } from './Thresholds.js';
 import { Toolbar, ViewportBar } from './Toolbar.js';
 import { initTooltips } from './Tooltips.js';
@@ -53,7 +54,9 @@ initTooltips(getElement('tooltip'));
 const settings = readSettingsFromUrl();
 
 if (settings.model === 'custom') settings.model = 'imp';
-const view: ViewState = { selectedLevel: 1, hoveredLevel: -1, isolate: false, forcedLevel: -1, playing: true, clip: 0 };
+
+const history = new History(settings);
+const view: ViewState = { selectedLevel: 1, hoveredLevel: -1, isolate: false, forcedLevel: -1, playing: true, clip: randomClip };
 const models = new Map<ModelName, Model>();
 
 const renderer = new WebGLRenderer({ antialias: true });
@@ -75,7 +78,7 @@ controls.maxPolarAngle = Math.PI / 2 - 0.02;
 controls.screenSpacePanning = false;
 controls.addEventListener('change', requestRender);
 
-const toolbar = new Toolbar(getElement('toolbar'), settings, view, { onModel: (name) => void selectModel(name), onOpenFile: (file) => void openModelFile(file), onPlay: togglePlay, onClip: selectClip, onImport });
+const toolbar = new Toolbar(getElement('toolbar'), settings, view, { onModel: (name) => void selectModel(name), onOpenFile: (file) => void openModelFile(file), onPlay: togglePlay, onClip: selectClip, onImport, onUndo: undo, onRedo: redo });
 const viewportBar = new ViewportBar(getElement('viewport-bar'), settings, view, { onChange: scheduleUpdate, onHighlight: updateHighlight, onResetCamera: resetCamera });
 const levelsPanel = new LevelsPanel(getElement('levels-dock'), settings, view, { onSelect: selectLevel, onHover: hoverLevel, onAdd: addLevel, onRemove: removeLevel });
 const dock = new BottomDock(getElement('bottom-dock'), settings, view, { onSelect: selectLevel, onHover: hoverLevel, onLanguage });
@@ -100,6 +103,7 @@ new ResizeObserver(resize).observe(viewport);
 resize();
 
 initFileDrop();
+document.addEventListener('keydown', onHistoryKey);
 
 await Promise.all([simplifyReady(), prepareInstancedRenderer(renderer)]);
 await selectModel(settings.model);
@@ -136,6 +140,7 @@ async function openModelFile(file: File): Promise<void> {
   models.set('custom', model);
   settings.model = 'custom';
   settings.models.custom = createModelSettings();
+  history.clear('custom');
   toolbar.setCustomModel(model.label);
   showModel(model);
 
@@ -201,11 +206,11 @@ function hasFiles(event: DragEvent): boolean {
 }
 
 function showModel(model: Model): void {
-  view.clip = 0;
+  view.clip = randomClip;
   view.forcedLevel = -1;
   toolbar.setModel(model);
   viewportBar.setModel(model);
-  preview.setClip(0);
+  preview.setClip(randomClip);
   inspector.render(model);
   update();
 }
@@ -264,6 +269,7 @@ function update(): void {
   if (model === undefined) return;
 
   writeSettingsToUrl(settings);
+  recordHistory();
 
   try {
     snapshot = createSnapshot(model);
@@ -437,8 +443,52 @@ function selectClip(clip: number): void {
 
 function onLanguage(): void {
   writeSettingsToUrl(settings);
+  recordHistory();
 
   if (snapshot !== null) dock.renderCode(snapshot);
+}
+
+function recordHistory(): void {
+  history.record();
+  toolbar.setHistory(history.canUndo, history.canRedo);
+}
+
+function undo(): void {
+  if (history.undo()) applyHistory();
+}
+
+function redo(): void {
+  if (history.redo()) applyHistory();
+}
+
+/**
+ * Shows the settings restored by undo or redo in every panel.
+ */
+function applyHistory(): void {
+  const model = models.get(settings.model);
+
+  viewportBar.sync();
+  dock.sync();
+
+  if (model !== undefined) inspector.render(model);
+
+  update();
+}
+
+function onHistoryKey(event: KeyboardEvent): void {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+
+  const key = event.key.toLowerCase();
+
+  if (key === 'z') {
+    event.preventDefault();
+
+    if (event.shiftKey) redo();
+    else undo();
+  } else if (key === 'y' && !event.shiftKey) {
+    event.preventDefault();
+    redo();
+  }
 }
 
 function onImport(text: string): void {

@@ -1,11 +1,11 @@
 import { copyText } from './BottomDock.js';
-import { createChoice, createElement } from './Controls.js';
+import { createChoice, createElement, selectChoice } from './Controls.js';
 import { icon, type IconName } from './Icons.js';
 import { getDrawnShading } from './LODPreview.js';
 import { isShadingAvailable, type Model } from './Models.js';
 import { modelLabels, modelNames, type ModelName, type PreviewLayout, type Settings, type ShadingMode } from './Settings.js';
 import { exportSettings } from './SettingsIO.js';
-import type { ViewState } from './State.js';
+import { randomClip, type ViewState } from './State.js';
 import { descriptions } from './Tooltips.js';
 
 export interface ToolbarCallbacks {
@@ -14,6 +14,8 @@ export interface ToolbarCallbacks {
   onPlay: () => void;
   onClip: (clip: number) => void;
   onImport: (text: string) => void;
+  onUndo: () => void;
+  onRedo: () => void;
 }
 
 export interface ViewportBarCallbacks {
@@ -31,6 +33,8 @@ export class Toolbar {
   private readonly callbacks: ToolbarCallbacks;
   private readonly modelPicker = createElement('div', 'model-picker');
   private readonly openButton = createToolButton('open', 'Open GLB', descriptions.openModel);
+  private readonly undoButton = createIconButton('undo', 'Undo', descriptions.undo);
+  private readonly redoButton = createIconButton('redo', 'Redo', descriptions.redo);
   private models: HTMLElement = createElement('div');
   private customLabel: string | null = null;
 
@@ -42,6 +46,7 @@ export class Toolbar {
     const brand = createElement('div', 'brand');
     const transport = createElement('div', 'transport');
     const files = createElement('div', 'files');
+    const history = createElement('div', 'history');
     const fileInput = createElement('input');
     const modelInput = createElement('input');
     const importButton = createToolButton('upload', 'Import', descriptions.import);
@@ -88,16 +93,24 @@ export class Toolbar {
     });
     linkButton.addEventListener('click', () => void copyText(window.location.href, linkButton));
     files.append(importButton, exportButton, linkButton, fileInput);
+    this.undoButton.addEventListener('click', callbacks.onUndo);
+    this.redoButton.addEventListener('click', callbacks.onRedo);
+    history.append(this.undoButton, this.redoButton);
     root.prepend(brand);
-    root.append(transport, createElement('span', 'spacer'), files);
+    root.append(history, transport, createElement('span', 'spacer'), files);
     this.setPlaying(view.playing);
   }
 
   setModel(model: Model): void {
     const names = model.skin?.clipNames ?? [];
+    const options = names.map((name, index) => createOption(String(index), name));
 
-    this.clip.replaceChildren(...names.map((name, index) => createOption(String(index), name)));
-    this.clip.value = String(Math.min(this.view.clip, Math.max(names.length - 1, 0)));
+    if (names.length > 1) options.unshift(createOption(String(randomClip), 'Random'));
+
+    const isRandom = this.view.clip === randomClip && names.length > 1;
+
+    this.clip.replaceChildren(...options);
+    this.clip.value = String(isRandom ? randomClip : Math.min(Math.max(this.view.clip, 0), Math.max(names.length - 1, 0)));
     this.clipField.hidden = names.length === 0;
   }
 
@@ -133,6 +146,11 @@ export class Toolbar {
     if (choice.parentElement !== this.modelPicker) this.modelPicker.prepend(choice);
   }
 
+  setHistory(canUndo: boolean, canRedo: boolean): void {
+    this.undoButton.disabled = !canUndo;
+    this.redoButton.disabled = !canRedo;
+  }
+
   setPlaying(playing: boolean): void {
     this.play.innerHTML = `${icon(playing ? 'pause' : 'play')}<span>${playing ? 'Pause' : 'Play'}</span>`;
     this.play.setAttribute('aria-pressed', String(playing));
@@ -146,12 +164,16 @@ const shadingOptions: { value: ShadingMode; label: string; tooltip: string }[] =
   { value: 'texture', label: 'Texture', tooltip: descriptions.shadingTexture }
 ];
 
+const layoutValues: PreviewLayout[] = ['distance', 'levels'];
+
 export class ViewportBar {
   private readonly view: ViewState;
   private readonly settings: Settings;
   private readonly forced = createElement('select', 'select');
+  private readonly layout: HTMLElement;
   private readonly shading: HTMLElement;
   private readonly colorByLevel: HTMLButtonElement;
+  private readonly flatShading: HTMLButtonElement;
   private model: Model | null = null;
   private levelsCount = 0;
 
@@ -163,7 +185,7 @@ export class ViewportBar {
     const forcedField = createElement('label', 'forced');
     const reset = createToolButton('focus', 'Reset view', descriptions.resetCamera);
 
-    createChoice<PreviewLayout>(root, {
+    this.layout = createChoice<PreviewLayout>(root, {
       tooltip: descriptions.layout,
       value: settings.layout,
       options: [{ value: 'distance', label: 'Distance' }, { value: 'levels', label: 'Side by side' }],
@@ -171,7 +193,8 @@ export class ViewportBar {
         settings.layout = value;
         callbacks.onChange();
       }
-    }).setAttribute('aria-label', 'Layout');
+    });
+    this.layout.setAttribute('aria-label', 'Layout');
 
     this.shading = createChoice<ShadingMode>(root, {
       tooltip: descriptions.shading,
@@ -190,16 +213,18 @@ export class ViewportBar {
       callbacks.onChange();
     });
 
+    this.flatShading = createToggleButton('Flat', descriptions.flatShading, settings.flatShading, (value) => {
+      settings.flatShading = value;
+      callbacks.onChange();
+    });
+
     toggles.append(
       this.colorByLevel,
       createToggleButton('Isolate', descriptions.isolate, view.isolate, (value) => {
         view.isolate = value;
         callbacks.onHighlight();
       }),
-      createToggleButton('Flat', descriptions.flatShading, settings.flatShading, (value) => {
-        settings.flatShading = value;
-        callbacks.onChange();
-      })
+      this.flatShading
     );
 
     this.forced.addEventListener('change', () => {
@@ -217,6 +242,16 @@ export class ViewportBar {
    */
   setModel(model: Model): void {
     this.model = model;
+    this.updateShading();
+  }
+
+  /**
+   * Shows the settings changed elsewhere, for example by undo.
+   */
+  sync(): void {
+    selectChoice<PreviewLayout>(this.layout, layoutValues, this.settings.layout);
+    this.colorByLevel.setAttribute('aria-pressed', String(this.settings.colorByLevel));
+    this.flatShading.setAttribute('aria-pressed', String(this.settings.flatShading));
     this.updateShading();
   }
 
@@ -255,6 +290,17 @@ function createToolButton(name: IconName, label: string, tooltip: string): HTMLB
   button.type = 'button';
   button.innerHTML = `${icon(name)}<span>${label}</span>`;
   button.dataset['tooltip'] = tooltip;
+
+  return button;
+}
+
+function createIconButton(name: IconName, label: string, tooltip: string): HTMLButtonElement {
+  const button = createElement('button', 'icon-button');
+
+  button.type = 'button';
+  button.innerHTML = icon(name);
+  button.dataset['tooltip'] = tooltip;
+  button.setAttribute('aria-label', label);
 
   return button;
 }

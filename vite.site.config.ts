@@ -17,9 +17,7 @@ export default defineConfig({
     chunkSizeWarningLimit: 1500,
     rolldownOptions: {
       input: {
-        index: resolve(root, 'index.html'),
-        playground: resolve(root, 'playground.html'),
-        lodPlayground: resolve(root, 'lod-playground.html')
+        index: resolve(root, 'index.html')
       }
     }
   }

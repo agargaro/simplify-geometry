@@ -18,6 +18,7 @@ import {
 import { isShadingAvailable, type Model } from './Models.js';
 import { instanceSpacing, type Settings, type ShadingMode } from './Settings.js';
 import { getTriangles, type GeometryLOD } from './Simplification.js';
+import { randomClip } from './State.js';
 import type { FieldLayout } from './Thresholds.js';
 
 export interface PreviewStats {
@@ -53,6 +54,7 @@ const noLevel = -1;
 const uncolored = 254;
 const checkerSize = 512;
 const checkerCells = 8;
+const clipSeed = 0.5;
 
 /**
  * Returns the shading drawn for the model: `shading`, or clay when the model does not support it.
@@ -87,7 +89,7 @@ export class LODPreview {
   private highlightedLevel = noLevel;
   private isolate = false;
   private time = 0;
-  private clip = 0;
+  private clip = randomClip;
   private getView: (camera: PerspectiveCamera) => DefaultView = getEmptyView;
 
   constructor(scene: Scene) {
@@ -314,12 +316,16 @@ export class LODPreview {
       const offset = mesh.userData['offset'] as number;
 
       if (skin !== null) {
-        const clip = Math.min(this.clip, skin.bake.clipCount - 1);
+        const clipCount = skin.bake.clipCount;
+        const fixedClip = Math.min(this.clip, clipCount - 1);
 
         mesh.animationTime = this.time;
 
         for (let id = 0; id < mesh.instancesCount; id++) {
-          mesh.playAnimationAt(id, clip, this.phases[offset + id] % skin.bake.getClipDuration(clip));
+          const index = offset + id;
+          const clip = this.clip === randomClip ? Math.floor(random(index + clipSeed) * clipCount) : fixedClip;
+
+          mesh.playAnimationAt(id, clip, this.phases[index] % skin.bake.getClipDuration(clip));
         }
       }
     }

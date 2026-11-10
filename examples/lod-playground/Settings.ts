@@ -119,7 +119,7 @@ function createLevel(error: number, screenSize: number, distance: number): Level
     updateVertices: false,
     lockBorder: false,
     sparse: false,
-    prune: false,
+    prune: true,
     regularize: false,
     regularizeLight: false,
     permissive: false,

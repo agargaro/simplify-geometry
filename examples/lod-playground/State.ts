@@ -12,6 +12,9 @@ export interface ViewState {
   clip: number;
 }
 
+/** Value of `ViewState.clip` that gives every instance a random clip. */
+export const randomClip = -1;
+
 /**
  * Result of the last update, shared by every panel.
  */
