@@ -23,7 +23,7 @@ const runtimeSyntax = [
 ];
 
 export default defineConfig([
-  { ignores: ['build/**', '.cache/**', '.claude/worktrees/**'] },
+  { ignores: ['build/**', 'site/**', '.cache/**', '.claude/worktrees/**'] },
   { files: ['**/*.js'], extends: [js.configs.recommended, formatting] },
   {
     files: ['**/*.ts'],

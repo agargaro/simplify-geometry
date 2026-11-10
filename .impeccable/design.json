@@ -1,0 +1,156 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-10T00:00:00Z",
+  "title": "Design System: LOD playground",
+  "extensions": {
+    "colorMeta": {
+      "graphite-bg": { "role": "neutral", "displayName": "Graphite", "canonical": "#0e0f11", "tonalRamp": ["#0e0f11", "#121316", "#17181b", "#1d1f23", "#222429", "#24262b", "#2a2d33", "#3a3e46"] },
+      "viewport": { "role": "neutral", "displayName": "Viewport Graphite", "canonical": "#121316" },
+      "panel": { "role": "neutral", "displayName": "Panel", "canonical": "#17181b" },
+      "panel-raised": { "role": "neutral", "displayName": "Panel Raised", "canonical": "#1d1f23" },
+      "panel-pressed": { "role": "neutral", "displayName": "Panel Pressed", "canonical": "#24262b" },
+      "line": { "role": "neutral", "displayName": "Splitter Line", "canonical": "#2a2d33" },
+      "line-soft": { "role": "neutral", "displayName": "Soft Divider", "canonical": "#222429" },
+      "line-strong": { "role": "neutral", "displayName": "Hover Border", "canonical": "#3a3e46" },
+      "text": { "role": "neutral", "displayName": "Text", "canonical": "#d7d9de", "tonalRamp": ["#5d626c", "#8b909a", "#c3c6cd", "#d7d9de", "#e6e8ec", "#ffffff"] },
+      "muted": { "role": "neutral", "displayName": "Muted Text", "canonical": "#8b909a" },
+      "faint": { "role": "neutral", "displayName": "Faint Text", "canonical": "#5d626c" },
+      "selection-blue": { "role": "primary", "displayName": "Selection Blue", "canonical": "#7aa2ff", "tonalRamp": ["oklch(25% 0.08 268)", "oklch(35% 0.11 268)", "oklch(45% 0.14 268)", "oklch(55% 0.15 268)", "oklch(65% 0.14 268)", "oklch(72% 0.13 268)", "oklch(84% 0.08 268)", "oklch(95% 0.03 268)"] },
+      "selection-blue-bg": { "role": "primary", "displayName": "Selection Tint", "canonical": "rgba(122, 162, 255, 0.14)" },
+      "selection-blue-line": { "role": "primary", "displayName": "Selection Line", "canonical": "rgba(122, 162, 255, 0.45)" },
+      "warning-amber": { "role": "secondary", "displayName": "Warning Amber", "canonical": "#e6b450", "tonalRamp": ["oklch(25% 0.06 80)", "oklch(35% 0.08 80)", "oklch(48% 0.1 80)", "oklch(60% 0.12 80)", "oklch(70% 0.13 80)", "oklch(79% 0.13 80)", "oklch(87% 0.09 80)", "oklch(95% 0.04 80)"] },
+      "warning-amber-bg": { "role": "secondary", "displayName": "Warning Tint", "canonical": "rgba(230, 180, 80, 0.1)" },
+      "danger": { "role": "secondary", "displayName": "Error Red", "canonical": "#f0707a" },
+      "level-0": { "role": "tertiary", "displayName": "Level 0 Steel", "canonical": "#9aa3ad" },
+      "level-1": { "role": "tertiary", "displayName": "Level 1 Mint", "canonical": "#4fd1a5" },
+      "level-2": { "role": "tertiary", "displayName": "Level 2 Violet", "canonical": "#b78cff" },
+      "level-3": { "role": "tertiary", "displayName": "Level 3 Magenta", "canonical": "#e86fd0" },
+      "level-4": { "role": "tertiary", "displayName": "Level 4 Lime", "canonical": "#a8d65a" },
+      "level-5": { "role": "tertiary", "displayName": "Level 5 Cyan", "canonical": "#3cc8d8" },
+      "level-6": { "role": "tertiary", "displayName": "Level 6 Salmon", "canonical": "#f59a7a" },
+      "level-7": { "role": "tertiary", "displayName": "Level 7 Teal", "canonical": "#2fae8f" },
+      "level-8": { "role": "tertiary", "displayName": "Level 8 Lilac", "canonical": "#d3a6ff" }
+    },
+    "typographyMeta": {
+      "title": { "displayName": "Title", "purpose": "Dock titles, section titles, brand name. The largest size in the system." },
+      "body": { "displayName": "Body", "purpose": "Labels, buttons, tabs, list text." },
+      "caption": { "displayName": "Caption", "purpose": "Column heads, captions, hints, subsection titles." },
+      "value": { "displayName": "Value", "purpose": "Every number and every input value, tabular, right-aligned." },
+      "code": { "displayName": "Code", "purpose": "Generated code panel." },
+      "label-mono": { "displayName": "Label Mono", "purpose": "Count badges, brand badge, timeline axis ticks." }
+    },
+    "shadows": [
+      { "name": "tooltip", "value": "0 6px 18px rgba(0, 0, 0, 0.4)", "purpose": "The only floating element: the tooltip." },
+      { "name": "selected-ring", "value": "inset 0 0 0 1px var(--accent-line)", "purpose": "Selected level row (timeline span uses var(--accent))." },
+      { "name": "pressed-underline", "value": "inset 0 -1px 0 var(--accent)", "purpose": "Pressed segment; selected tab uses -2px." }
+    ],
+    "motion": [
+      { "name": "checkbox", "value": "background-color 120ms, border-color 120ms", "purpose": "Checkbox check; removed under prefers-reduced-motion." },
+      { "name": "dim-light", "value": "lerp 0.45 toward #2c2f35", "purpose": "Viewport: other levels while a level is selected." },
+      { "name": "dim-strong", "value": "lerp 0.72 toward #2c2f35", "purpose": "Viewport: other levels while isolating or hovering a level." }
+    ],
+    "breakpoints": [
+      { "name": "single-column", "value": "860px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Tool Button",
+      "kind": "button",
+      "refersTo": "tool-button",
+      "description": "Transparent toolbar action; Play is the outlined variant.",
+      "html": "<button class=\"ds-tool-button\" type=\"button\"><svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 3.5v7M5 7.5l3 3 3-3M3.5 10.5v2h9v-2\"/></svg>Export</button>",
+      "css": ".ds-tool-button { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border: 1px solid transparent; border-radius: 3px; background: none; color: var(--muted, #8b909a); font: 12px/1.4 system-ui, sans-serif; cursor: pointer; } .ds-tool-button:hover { background: var(--panel-2, #1d1f23); color: var(--text, #d7d9de); } .ds-tool-button:focus-visible { outline: 1px solid var(--accent, #7aa2ff); outline-offset: 1px; }"
+    },
+    {
+      "name": "Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Viewport bar toggle; pressed takes the blue selection treatment.",
+      "html": "<button class=\"ds-chip\" type=\"button\" aria-pressed=\"false\">Isolate</button><button class=\"ds-chip\" type=\"button\" aria-pressed=\"true\">Color by level</button>",
+      "css": ".ds-chip { height: 22px; padding: 0 8px; margin-right: 4px; border: 1px solid var(--line, #2a2d33); border-radius: 2px; background: none; color: var(--muted, #8b909a); font: 12px system-ui, sans-serif; cursor: pointer; } .ds-chip:hover { color: var(--text, #d7d9de); } .ds-chip[aria-pressed='true'] { border-color: rgba(122, 162, 255, 0.45); background: rgba(122, 162, 255, 0.14); color: var(--text, #d7d9de); } .ds-chip:focus-visible { outline: 1px solid var(--accent, #7aa2ff); outline-offset: 1px; }"
+    },
+    {
+      "name": "Flag Chip",
+      "kind": "chip",
+      "refersTo": "flag-chip",
+      "description": "Mono checkbox chip for simplify flags.",
+      "html": "<label class=\"ds-flag\"><input type=\"checkbox\" checked>lockBorder</label><label class=\"ds-flag\"><input type=\"checkbox\">sparse</label>",
+      "css": ".ds-flag { display: inline-flex; align-items: center; height: 22px; padding: 0 7px; margin-right: 4px; border: 1px solid var(--line, #2a2d33); border-radius: 2px; color: var(--muted, #8b909a); font: 11px ui-monospace, Consolas, monospace; cursor: pointer; } .ds-flag input { position: absolute; opacity: 0; pointer-events: none; } .ds-flag:hover { color: var(--text, #d7d9de); } .ds-flag:has(input:checked) { border-color: rgba(122, 162, 255, 0.45); background: rgba(122, 162, 255, 0.14); color: var(--text, #d7d9de); } .ds-flag:has(input:focus-visible) { outline: 1px solid var(--accent, #7aa2ff); outline-offset: 1px; }"
+    },
+    {
+      "name": "Segmented Control",
+      "kind": "nav",
+      "refersTo": "segmented",
+      "description": "Inset track; pressed segment gets a 1px blue underline.",
+      "html": "<div class=\"ds-segmented\"><button class=\"ds-segment\" aria-pressed=\"true\">Pixel error</button><button class=\"ds-segment\" aria-pressed=\"false\">Screen size</button><button class=\"ds-segment\" aria-pressed=\"false\">Distance</button></div>",
+      "css": ".ds-segmented { display: inline-flex; padding: 1px; border: 1px solid var(--line, #2a2d33); border-radius: 3px; background: var(--bg, #0e0f11); } .ds-segment { height: 18px; padding: 0 9px; border: 0; border-radius: 2px; background: none; color: var(--muted, #8b909a); font: 12px system-ui, sans-serif; cursor: pointer; } .ds-segment:hover { color: var(--text, #d7d9de); } .ds-segment[aria-pressed='true'] { background: var(--panel-3, #24262b); color: var(--text, #d7d9de); box-shadow: inset 0 -1px 0 var(--accent, #7aa2ff); } .ds-segment:focus-visible { outline: 1px solid var(--accent, #7aa2ff); outline-offset: 1px; }"
+    },
+    {
+      "name": "Number Field",
+      "kind": "input",
+      "refersTo": "number-input",
+      "description": "Label, slider and mono number box; the box focuses by border.",
+      "html": "<div class=\"ds-field\"><label>Max error (px)</label><div class=\"ds-control\"><input class=\"ds-range\" type=\"range\" value=\"20\"><input class=\"ds-number\" type=\"number\" value=\"1\"></div></div>",
+      "css": ".ds-field { display: grid; grid-template-columns: 100px minmax(0, 1fr); align-items: center; gap: 8px; width: 280px; color: var(--muted, #8b909a); font: 12px system-ui, sans-serif; } .ds-control { display: grid; grid-template-columns: minmax(0, 1fr) 64px; align-items: center; gap: 8px; } .ds-number { width: 100%; height: 22px; padding: 0 6px; border: 1px solid var(--line, #2a2d33); border-radius: 2px; background: var(--bg, #0e0f11); color: var(--text, #d7d9de); font: 11px ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; text-align: right; appearance: textfield; } .ds-number:hover { border-color: #3a3e46; } .ds-number:focus-visible { outline: none; border-color: var(--accent, #7aa2ff); } .ds-range { width: 100%; height: 14px; margin: 0; background: none; appearance: none; } .ds-range::-webkit-slider-runnable-track { height: 2px; background: var(--line, #2a2d33); } .ds-range::-webkit-slider-thumb { width: 10px; height: 10px; margin-top: -4px; border: 0; border-radius: 1px; background: var(--text, #d7d9de); appearance: none; } .ds-range:hover::-webkit-slider-thumb { background: #fff; }"
+    },
+    {
+      "name": "Tabs",
+      "kind": "nav",
+      "refersTo": "tab-selected",
+      "description": "Bottom dock tabs with mono count; warnings count turns amber.",
+      "html": "<div class=\"ds-tabs\"><button class=\"ds-tab\" aria-selected=\"true\">Distance</button><button class=\"ds-tab\" aria-selected=\"false\">Code</button><button class=\"ds-tab ds-warn\" aria-selected=\"false\">Warnings<span class=\"ds-count\">2</span></button></div>",
+      "css": ".ds-tabs { display: flex; height: 32px; background: var(--panel, #17181b); border-bottom: 1px solid var(--line, #2a2d33); } .ds-tab { display: flex; align-items: center; gap: 6px; padding: 0 12px; border: 0; border-right: 1px solid var(--line-soft, #222429); background: none; color: var(--muted, #8b909a); font: 12px system-ui, sans-serif; cursor: pointer; } .ds-tab:hover { color: var(--text, #d7d9de); } .ds-tab[aria-selected='true'] { background: var(--panel-2, #1d1f23); color: var(--text, #d7d9de); box-shadow: inset 0 -2px 0 var(--accent, #7aa2ff); } .ds-tab:focus-visible { outline: 1px solid var(--accent, #7aa2ff); outline-offset: -1px; } .ds-count { min-width: 16px; padding: 0 4px; border-radius: 2px; background: var(--panel-3, #24262b); color: var(--muted, #8b909a); font: 600 10px/15px ui-monospace, Consolas, monospace; text-align: center; } .ds-warn .ds-count { background: rgba(230, 180, 80, 0.1); color: #e6b450; }"
+    },
+    {
+      "name": "Level Row",
+      "kind": "custom",
+      "refersTo": "level-row",
+      "description": "Levels event list row: swatch, mono numbers, share bar in the level colour, blue ring when selected.",
+      "html": "<button class=\"ds-level\" aria-pressed=\"true\" style=\"--level: #b78cff\"><span class=\"ds-id\"><i class=\"ds-swatch\"></i>L2</span><span class=\"ds-num\">1,912</span><span class=\"ds-num ds-muted\">13%</span><span class=\"ds-num\">40</span><span class=\"ds-bar\"><i style=\"width: 13%\"></i></span><span class=\"ds-meta\">err 0.012  switch 18% · 14.9 u</span></button>",
+      "css": ".ds-level { display: grid; grid-template-columns: minmax(0, 1fr) 64px 44px 34px; column-gap: 8px; row-gap: 5px; align-items: center; width: 288px; padding: 9px 12px; border: 0; border-bottom: 1px solid var(--line-soft, #222429); background: var(--panel, #17181b); color: var(--text, #d7d9de); font: 12px/1.4 system-ui, sans-serif; text-align: left; cursor: pointer; } .ds-level:hover { background: var(--panel-2, #1d1f23); } .ds-level[aria-pressed='true'] { background: rgba(122, 162, 255, 0.14); box-shadow: inset 0 0 0 1px rgba(122, 162, 255, 0.45); } .ds-level:focus-visible { outline: 1px solid var(--accent, #7aa2ff); outline-offset: -1px; } .ds-id { display: flex; align-items: center; gap: 7px; font: 600 12px ui-monospace, Consolas, monospace; } .ds-swatch { width: 8px; height: 8px; border-radius: 1px; background: var(--level); } .ds-num { font-family: ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; text-align: right; } .ds-muted { color: var(--muted, #8b909a); } .ds-bar { grid-column: 1 / -1; height: 2px; background: var(--line-soft, #222429); } .ds-bar i { display: block; height: 100%; background: var(--level); } .ds-meta { grid-column: 1 / -1; color: var(--muted, #8b909a); font: 11px ui-monospace, Consolas, monospace; }"
+    },
+    {
+      "name": "Timeline Span",
+      "kind": "custom",
+      "refersTo": "level-row-selected",
+      "description": "Distance timeline span: level-colour top edge and 13% fill; selected adds a blue ring.",
+      "html": "<div class=\"ds-track\"><button class=\"ds-span\" style=\"--level: #4fd1a5; width: 40%\">L1<span>4.99+</span></button><button class=\"ds-span\" aria-pressed=\"true\" style=\"--level: #b78cff; width: 35%\">L2<span>14.9+</span></button></div>",
+      "css": ".ds-track { display: flex; width: 400px; height: 44px; background: var(--bg, #0e0f11); } .ds-span { display: flex; flex-direction: column; justify-content: center; gap: 1px; padding: 0 8px; border: 0; border-left: 1px solid var(--bg, #0e0f11); border-top: 2px solid var(--level); background: color-mix(in srgb, var(--level) 13%, #0e0f11); color: var(--text, #d7d9de); font: 11px ui-monospace, Consolas, monospace; text-align: left; cursor: pointer; } .ds-span span { color: var(--muted, #8b909a); font-size: 10px; } .ds-span:hover { background: color-mix(in srgb, var(--level) 22%, #0e0f11); } .ds-span[aria-pressed='true'] { background: color-mix(in srgb, var(--level) 24%, #0e0f11); box-shadow: inset 0 0 0 1px var(--accent, #7aa2ff); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Captured Frame",
+    "overview": "The page reads like a GPU frame debugger: each LOD level is a draw you inspect, listed as an event in a dense docked list beside the viewport, with its triangles, error and switch distance printed as numbers. Panels are docked graphite slabs separated by 1px splitters; nothing floats over the canvas except the error banner and tooltips.\n\nDensity is high and deliberate: 12px system UI text, 22px controls, 32px dock headers. Colour carries meaning, not decoration. Blue is the selection, amber is a warning, and the level colours are data markers that tie a list row to its timeline span and to the tinted instances in the viewport.",
+    "keyCharacteristics": [
+      "Docked grid, 1px splitters, no cards, no floating GUI over the canvas.",
+      "One blue for selection and focus, one amber for warnings, a separate data palette for levels.",
+      "Monospace tabular numerals for every number and every line of code.",
+      "Square-ish forms: nothing rounder than 3px.",
+      "One selection, echoed everywhere: list, timeline, inspector, viewport."
+    ],
+    "rules": [
+      { "name": "The Two Signals Rule", "body": "Blue means \"selected or focused\", amber means \"warning\". Neither appears for emphasis, branding of a section, or decoration. A new state that is neither gets a neutral treatment.", "section": "colors" },
+      { "name": "The Data Palette Rule", "body": "Level colours are data, never UI. They mark a level (swatch, bar, timeline span, viewport tint) and nothing else, and new entries must stay out of the blue and amber hue families so a level can never read as selected or warned.", "section": "colors" },
+      { "name": "The Selection Is A Ring Rule", "body": "Selecting a level never recolours it. The level keeps its own colour; selection is added on top as a blue tint and 1px blue ring (row, timeline span), or a blue underline (tabs, segments).", "section": "colors" },
+      { "name": "The Mono Numbers Rule", "body": "Every number (triangles, share, instance count, error, distance, pixel size) and every code identifier is set in the mono stack with tabular numerals, right-aligned in columns. Sans text never carries a measured value.", "section": "typography" },
+      { "name": "The Flat Ramp Rule", "body": "Hierarchy comes from weight (600), colour (text, muted, faint) and the section-title band, not from size. Stay within 10 to 12px.", "section": "typography" },
+      { "name": "The Docked Rule", "body": "Everything is docked. Only transient overlays (tooltip, error banner) float, and the 3D canvas is never covered by persistent controls.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do dock every new panel into the grid and let the 1px `gap` draw the splitter.",
+      "Do set every number and code fragment in the mono stack with tabular numerals, right-aligned in columns.",
+      "Do keep controls at the 22px control height and buttons at 24px, with 12px dock padding.",
+      "Do give every new control a `data-tooltip`.",
+      "Do route any new level view through the shared selection: list, timeline, inspector and viewport dimming move together.",
+      "Do mark a level only with its `level-N` colour, and show selection on top of it with blue tint and ring."
+    ],
+    "donts": [
+      "Don't use blue for anything but selection and focus, or amber for anything but warnings.",
+      "Don't add a level colour in the blue or amber hue families.",
+      "Don't use a radius above 3px.",
+      "Don't add cards, drop shadows or floating panels over the canvas; the tooltip is the only shadowed element.",
+      "Don't set measured values in the sans face or grow type beyond 12px for hierarchy."
+    ]
+  }
+}
