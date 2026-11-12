@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Create and tune the LOD levels of a mesh for InstancedMesh2 with @three.ez/simplify-geometry: skinned and morphed models, switch points, generated code." />
-  <title>LOD playground · @three.ez/simplify-geometry</title>
+  <title>LOD Editor · @three.ez/simplify-geometry</title>
   <style>
     :root {
       color-scheme: dark;
@@ -148,6 +148,8 @@
       align-items: center;
       gap: 12px;
       padding: 0 8px 0 12px;
+      overflow-x: auto;
+      scrollbar-width: none;
     }
 
     .brand {
@@ -162,6 +164,18 @@
 
     .brand .icon {
       color: var(--accent);
+    }
+
+    .brand-title {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+
+    .brand-package {
+      color: var(--muted);
+      font: 400 11px var(--mono);
     }
 
     .brand b {
@@ -224,13 +238,6 @@
       color: var(--text);
     }
 
-    .tool-button.play {
-      min-width: 76px;
-      border-color: var(--line);
-      color: var(--text);
-    }
-
-    .clip,
     .forced {
       display: inline-flex;
       align-items: center;
@@ -402,6 +409,7 @@
     }
 
     .icon-button {
+      flex: none;
       display: grid;
       place-items: center;
       width: 24px;
@@ -420,6 +428,12 @@
 
     .icon-button:disabled {
       opacity: 0.35;
+    }
+
+    .icon-button[aria-pressed='true'] {
+      border-color: var(--accent-line);
+      background: var(--accent-bg);
+      color: var(--text);
     }
 
     .dock-footer {
@@ -604,6 +618,27 @@
       background: var(--muted);
     }
 
+    .frame {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 4px 8px;
+      align-items: baseline;
+      margin-top: 8px;
+    }
+
+    .frame-value {
+      overflow: hidden;
+      font-family: var(--mono);
+      text-align: right;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .frame-renderer {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
     .build {
       display: flex;
       align-items: center;
@@ -672,20 +707,6 @@
       margin-top: 6px;
       color: var(--muted);
       font-size: 11px;
-    }
-
-    .credits {
-      margin-top: 6px;
-      color: var(--faint);
-      font-size: 11px;
-    }
-
-    .credits a {
-      color: var(--muted);
-    }
-
-    .credits a:hover {
-      color: var(--text);
     }
 
     .links {
@@ -761,6 +782,192 @@
       font-family: var(--mono);
       font-size: 11px;
       pointer-events: none;
+    }
+
+    .camera-hint {
+      position: absolute;
+      left: 8px;
+      bottom: 8px;
+      z-index: 2;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 12px 28px;
+      max-width: calc(100% - 16px);
+      padding: 8px 10px;
+      border: 1px solid #353941;
+      border-radius: 3px;
+      background: rgba(23, 24, 27, 0.88);
+      color: var(--muted);
+      font-size: 11.5px;
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transform: translateY(4px);
+      transition: opacity 200ms ease-out, transform 200ms ease-out, visibility 0s linear 200ms;
+    }
+
+    .camera-hint.is-visible {
+      opacity: 1;
+      visibility: visible;
+      transform: none;
+      transition: opacity 200ms ease-out, transform 200ms ease-out;
+    }
+
+    #app.is-empty .camera-hint {
+      display: none;
+    }
+
+    .camera-hint-group {
+      display: grid;
+      grid-template-columns: auto auto;
+      gap: 6px 16px;
+      align-items: center;
+      white-space: nowrap;
+    }
+
+    .camera-hint-group.is-shortcuts {
+      grid-template-columns: auto auto auto auto;
+      column-gap: 14px;
+    }
+
+    .camera-hint-title {
+      grid-column: 1 / -1;
+      color: var(--faint);
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .camera-hint-row {
+      display: contents;
+    }
+
+    .camera-hint-input {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--faint);
+    }
+
+    .camera-hint-input .icon {
+      color: var(--text);
+    }
+
+    .camera-hint-gesture {
+      margin-left: 2px;
+      color: var(--muted);
+    }
+
+    .camera-hint-action {
+      color: var(--text);
+    }
+
+    .transition-labels {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      overflow: hidden;
+      pointer-events: none;
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    #app.is-empty .transition-labels {
+      display: none;
+    }
+
+    .transition-label {
+      position: absolute;
+      left: 0;
+      top: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1px;
+      padding-bottom: 8px;
+      white-space: nowrap;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+    }
+
+    .transition-title {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .transition-detail {
+      color: var(--muted);
+    }
+
+    .transition-badge {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      padding: 3px 8px;
+      border: 1px solid #353941;
+      border-radius: 3px;
+      background: rgba(23, 24, 27, 0.88);
+      color: var(--muted);
+    }
+
+    .transition-badge {
+      border-color: var(--accent-line);
+      color: var(--text);
+      pointer-events: auto;
+    }
+
+    #app.is-camera-locked .camera-hint .is-camera {
+      display: none;
+    }
+
+    .transition-nav {
+      position: absolute;
+      left: 50%;
+      bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px;
+      border: 1px solid #353941;
+      border-radius: 3px;
+      background: rgba(23, 24, 27, 0.88);
+      transform: translateX(-50%);
+      pointer-events: auto;
+    }
+
+    .transition-nav-label {
+      min-width: 112px;
+      color: var(--muted);
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .transition-nav-label .transition-level {
+      font-weight: 600;
+    }
+
+    .transition-message {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+    }
+
+    .keycap {
+      min-width: 18px;
+      height: 18px;
+      padding: 0 5px;
+      border: 1px solid var(--line);
+      border-bottom-width: 2px;
+      border-radius: 2px;
+      background: var(--panel);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 10.5px;
+      line-height: 15px;
+      text-align: center;
     }
 
     .error {
@@ -1098,7 +1305,7 @@
 
     button[data-tooltip],
     label.flag[data-tooltip],
-    .clip[data-tooltip],
+    select[data-tooltip],
     .forced[data-tooltip] {
       cursor: pointer;
     }
@@ -1109,9 +1316,56 @@
 
     .field-control {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 64px;
+      grid-template-columns: minmax(0, 1fr) auto;
       align-items: center;
       gap: 8px;
+    }
+
+    .stepper {
+      display: grid;
+      grid-template-columns: 18px 56px 18px;
+      align-items: center;
+    }
+
+    .stepper .number {
+      border-radius: 0;
+    }
+
+    .step-button {
+      display: grid;
+      place-items: center;
+      width: 18px;
+      height: var(--control-h);
+      padding: 0;
+      border: 1px solid var(--line);
+      background: var(--bg);
+      color: var(--muted);
+      cursor: pointer;
+    }
+
+    .step-button:first-child {
+      border-right: 0;
+      border-radius: 2px 0 0 2px;
+    }
+
+    .step-button:last-child {
+      border-left: 0;
+      border-radius: 0 2px 2px 0;
+    }
+
+    .step-button .icon {
+      width: 10px;
+      height: 10px;
+    }
+
+    .step-button:hover:not(:disabled) {
+      background: var(--panel-2);
+      color: var(--text);
+    }
+
+    .step-button:disabled {
+      color: var(--faint);
+      cursor: default;
     }
 
     .number {
@@ -1424,13 +1678,86 @@
       box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
     }
 
+    .tooltip-shortcut {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-top: 6px;
+      color: var(--muted);
+    }
+
+    .tooltip-shortcut .keycap:first-of-type {
+      margin-left: 2px;
+    }
+
+    .about {
+      width: min(360px, calc(100vw - 32px));
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--panel);
+      color: var(--muted);
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+    }
+
+    .about::backdrop {
+      background: rgba(8, 9, 11, 0.4);
+    }
+
+    .about p + p {
+      margin-top: 8px;
+    }
+
+    .about a {
+      color: var(--text);
+    }
+
+    .about-title {
+      margin-bottom: 8px;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .transport {
+      position: absolute;
+      right: 8px;
+      bottom: 8px;
+      z-index: 2;
+      padding: 3px;
+      border: 1px solid #353941;
+      border-radius: 3px;
+      background: rgba(23, 24, 27, 0.88);
+    }
+
+    .viewport:has(.camera-hint.is-visible) .transport {
+      visibility: hidden;
+    }
+
+    .level-result {
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .level-result:empty {
+      display: none;
+    }
+
     @media (max-width: 1180px) {
-      .files .tool-button span {
+      .files .tool-button span,
+      .links .tool-button span,
+      .brand-package {
         display: none;
       }
     }
 
     @media (prefers-reduced-motion: reduce) {
+
+      .camera-hint,
+      .camera-hint.is-visible {
+        transform: none;
+        transition: none;
+      }
 
       .switch,
       .switch::after {
@@ -1466,6 +1793,7 @@
         overflow: visible;
       }
 
+      .brand-package,
       .toolbar .spacer,
       .viewport-bar .spacer {
         display: none;

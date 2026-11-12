@@ -16,7 +16,8 @@ const modelEnumValues: Partial<Record<keyof ModelSettings, readonly string[]>> =
 
 const enumValues: Partial<Record<keyof Settings, readonly string[]>> = {
   language: ['ts', 'js'],
-  layout: ['distance', 'levels'],
+  layout: ['distance', 'levels', 'transitions'],
+  transitionView: ['pair', 'flip'],
   shading: ['clay', 'uv', 'material', 'texture', 'wireframe']
 };
 
@@ -86,8 +87,8 @@ export function importSettings(text: string): Settings {
     throw new Error('The file is not valid JSON.');
   }
 
-  if (!isValues(values) || !isValues(values['settings'])) throw new Error('The file is not a LOD playground configuration.');
-  if (!readableVersions.includes(values['version'] as number)) throw new Error(`The file was saved by another version of the LOD playground (version ${String(values['version'])}, expected ${fileVersion}).`);
+  if (!isValues(values) || !isValues(values['settings'])) throw new Error('The file is not a LOD Editor configuration.');
+  if (!readableVersions.includes(values['version'] as number)) throw new Error(`The file was saved by another version of the LOD Editor (version ${String(values['version'])}, expected ${fileVersion}).`);
 
   return createSettings(values['settings']);
 }

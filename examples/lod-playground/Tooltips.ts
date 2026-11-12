@@ -47,7 +47,13 @@ export const descriptions = {
   nextLevel: 'Selects the coarser level after this one (Arrow Down in the levels list).',
   addLevel: 'Adds a simpler level after the last one, with the smallest error that gives at least 1.5 times fewer triangles. It keeps the flags of the last level.',
   removeLevel: 'Removes the last level.',
-  layout: 'Crowd scatters the instances on the ground, from close to the camera to far away, and lets InstancedMesh2 pick the level of each one. Side by side shows every level next to the others.',
+  layout: 'Crowd scatters the instances on the ground, from close to the camera to far away, and lets InstancedMesh2 pick the level of each one. Side by side shows every level next to the others. Transitions shows every switch between two levels at the size on screen where it happens, to judge the popping.',
+  transitionView: 'How each switch is compared, always at its real size on screen.',
+  previousTransition: 'Moves the camera to the previous switch, a larger one.',
+  nextTransition: 'Moves the camera to the next switch, a smaller one.',
+  realSize: 'Every switch is as tall on screen as when it happens in a scene. The camera is locked so that it stays so: use the arrows to move from one switch to another.',
+  transitionPair: 'Shows the two levels of each switch next to each other.',
+  transitionFlip: 'Alternates the two levels of each switch in the same place, as the switch would look in a scene. Color by level is off here, so that only the shape changes.',
   shading: 'How the instances are drawn. Options the model does not support are disabled.',
   shadingClay: 'A plain gray material, to judge the silhouette and the shading of each level.',
   shadingUv: 'A checker grid on the UVs, to spot stretched, flipped or broken texture coordinates in the simplified levels.',
@@ -56,6 +62,7 @@ export const descriptions = {
   shadingWireframe: 'The edges of every triangle, to compare the topology of the levels. Color by level works here too.',
   environment: 'Lights the material of the model with an environment map, so that its metallic and glossy parts reflect something. Only with the Material shading.',
   github: 'Opens the repository on GitHub. A star helps other developers find it.',
+  about: 'Credits of the library and of the sample models.',
   npm: 'Opens the @three.ez/simplify-geometry package on npm.',
   resetSettings: 'Recomputes the default levels of this model and restores its simplification, level switching and the preview settings. The other models keep theirs. Undo brings them back.',
   colorByLevel: 'Colors every instance with the color of the level it draws. Only with the clay shading.',
@@ -67,7 +74,14 @@ export const descriptions = {
   levelShare: 'Triangles of the level as a share of the source triangles.',
   levelInstances: 'Instances drawn with the level in the current frame.',
   drawn: 'Triangles drawn in the current frame, against drawing every visible instance with level 0.',
+  gpuTime: 'Time the GPU spends drawing a frame, averaged over the last 30 frames drawn and updated every 10 frames. The viewport draws only when something changes, so when still it is the time of the last frame.',
+  fps: 'Frames drawn per second, updated every 10 frames. The browser caps it at the refresh rate of the display. Idle when nothing changes, because the viewport then stops drawing.',
+  gpuTimeUnavailable: 'This browser does not expose EXT_disjoint_timer_query_webgl2, which measures the GPU time. Chrome and Edge on desktop do.',
   levelError: 'Error of the level as estimated by meshoptimizer: roughly how far its surface is from the source, as a share of the mesh size (in model units with Absolute error). Auto switching uses it. It is an estimate: thin parts can move more.',
+  levelBuildTime: 'Time to simplify this level alone, measured by Measure build time. The levels together take less than the sum, because they share the preparation of the source.',
+  levelResult: 'Triangles of the simplified level, and their share of the source triangles.',
+  levelResultError: 'Error reached by meshoptimizer, out of the Error target of the level. Auto switching uses the error reached.',
+  levelStop: 'Simplification stops at the first limit it meets: the triangles asked by Ratio, or the next collapse exceeding the Error target. When the error reached stays well below the target, locked borders, seams or the topology left no edge to collapse.',
   levelSwitch: 'Where instances switch to this level: from this camera distance, in model units, which is when the instance is at most this tall on screen, as a share of the viewport height.',
   fov: 'Vertical field of view of the camera. A wider view makes the instances smaller on screen, so in Auto and screen size modes they switch levels at shorter distances.',
   instances: 'Number of instances in the Crowd layout.',
@@ -120,6 +134,25 @@ function placeTooltip(tooltip: HTMLElement, element: HTMLElement): void {
   const rect = element.getBoundingClientRect();
 
   tooltip.textContent = element.dataset['tooltip'] ?? '';
+
+  const shortcut = element.dataset['shortcut'];
+
+  if (shortcut !== undefined) {
+    const line = document.createElement('span');
+
+    line.className = 'tooltip-shortcut';
+    line.textContent = 'Shortcut';
+
+    for (const key of shortcut.split(' ')) {
+      const cap = document.createElement('kbd');
+
+      cap.className = 'keycap';
+      cap.textContent = key;
+      line.append(cap);
+    }
+
+    tooltip.append(line);
+  }
 
   const width = tooltip.offsetWidth;
   const height = tooltip.offsetHeight;

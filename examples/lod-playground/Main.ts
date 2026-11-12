@@ -1,11 +1,14 @@
 import { prepareInstancedRenderer } from '@three.ez/instanced-mesh';
 import { simplifyReady } from '@three.ez/simplify-geometry';
-import { AmbientLight, type BufferGeometry, Color, DirectionalLight, PerspectiveCamera, PMREMGenerator, Scene, Vector3, WebGLRenderer } from 'three';
-import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
+import { AmbientLight, type BufferGeometry, Color, DirectionalLight, PerspectiveCamera, PMREMGenerator, Scene, WebGLRenderer } from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { BottomDock } from './BottomDock.js';
+import { CameraHint } from './CameraHint.js';
 import { computeDefaultLevels, computeNextLevel } from './DefaultLevels.js';
-import { formatTime } from './Format.js';
+import { formatPercent, formatTime } from './Format.js';
+import { FlyControls } from './FlyControls.js';
+import { FrameRate } from './FrameRate.js';
+import { getRendererInfo, GpuTimer } from './GpuTimer.js';
 import { History } from './History.js';
 import { Inspector } from './Inspector.js';
 import { LevelNav } from './LevelNav.js';
@@ -19,9 +22,11 @@ import { importSettings, readInitialSettings, readRemovedModels, saveRemovedMode
 import { disposeLOD, getTriangles, simplifyGeometry, type GeometryLOD } from './Simplification.js';
 import { randomClip, type Snapshot, type ViewState } from './State.js';
 import { getFieldLayout, getSwitchDistance, getSwitchScreenSize, getThresholds, getUsedLevels } from './Thresholds.js';
-import { Toolbar, ViewportBar, type ModelTab } from './Toolbar.js';
+import { initShortcuts } from './Shortcuts.js';
+import { Toolbar, Transport, ViewportBar, type ModelTab } from './Toolbar.js';
+import { TransitionLabels } from './TransitionLabels.js';
 import { initTooltips } from './Tooltips.js';
-import { getResultWarnings, getSettingsWarnings } from './Warnings.js';
+import { getResultWarnings, getSettingsWarnings, type Warning } from './Warnings.js';
 
 interface LODCache {
   key: string;
@@ -61,11 +66,13 @@ const fileModels: ModelId[] = [];
 const renderer = new WebGLRenderer({ antialias: true });
 const scene = new Scene();
 const camera = new PerspectiveCamera(settings.fov, 1, 0.1, 5000);
-const controls = new MapControls(camera, renderer.domElement);
+const controls = new FlyControls(camera, renderer.domElement);
 const light = new DirectionalLight('white', 2.2);
-const wheelForward = new Vector3();
-let wheelStep = 0.01;
 const preview = new LODPreview(scene);
+const cameraHint = new CameraHint(viewport);
+const transitionLabels = new TransitionLabels(viewport, focusTransition);
+const gpuTimer = new GpuTimer(renderer);
+const frameRate = new FrameRate();
 
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 initModelLoaders(renderer);
@@ -75,26 +82,34 @@ scene.background = new Color('#121316');
 scene.add(new AmbientLight('white', 0.9), camera);
 light.position.set(0.4, 1, 0.6);
 camera.add(light, light.target);
-controls.maxPolarAngle = Math.PI / 2 - 0.02;
-controls.screenSpacePanning = false;
-controls.zoomToCursor = true;
-controls.zoomSpeed = 0.5;
-controls.panSpeed = 0.5;
-controls.rotateSpeed = 0.6;
-controls.enableZoom = false;
-controls.addEventListener('change', requestRender);
-renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
+controls.onStart = () => {
+  cameraHint.onCameraStart();
+};
+controls.onChange = requestRender;
 
-const toolbar = new Toolbar(getElement('toolbar'), settings, view, { onModel: (id) => void selectModel(id), onRemoveModel: (id) => void removeModel(id), onRestoreModels: restoreModels, onOpenFiles: (files) => void openModelFiles(files), onPlay: togglePlay, onClip: selectClip, onImport, onUndo: undo, onRedo: redo, onReset });
-const viewportBar = new ViewportBar(getElement('viewport-bar'), settings, view, { onChange: scheduleUpdate, onHighlight: updateHighlight, onResetCamera: resetCamera });
+const toolbar = new Toolbar(getElement('toolbar'), settings, { onModel: (id) => void selectModel(id), onRemoveModel: (id) => void removeModel(id), onRestoreModels: restoreModels, onOpenFiles: (files) => void openModelFiles(files), onImport, onUndo: undo, onRedo: redo, onReset });
+const viewportBar = new ViewportBar(getElement('viewport-bar'), settings, view, { onChange: scheduleUpdate, onHighlight: updateHighlight, onResetCamera: resetCamera, onCameraHint: toggleCameraHint });
+const transport = new Transport(viewport, view, { onPlay: togglePlay, onClip: selectClip });
 const levelsPanel = new LevelsPanel(getElement('levels-dock'), settings, view, { onSelect: selectLevel, onHover: hoverLevel, onAdd: addLevel, onRemove: removeLevel, onMeasure: () => void measureBuildTime() });
-const dock = new BottomDock(getElement('bottom-dock'), settings, view, { onSelect: selectLevel, onHover: hoverLevel, onLanguage });
+const dock = new BottomDock(getElement('bottom-dock'), settings, view, { onSelect: selectLevel, onHover: hoverLevel, onWarning: showWarning, onLanguage });
 const inspector = new Inspector(getElement('inspector'), levelsPanel.settingsContainer, settings, view, scheduleUpdate);
 const levelNav = new LevelNav(document.querySelector<HTMLElement>('.inspector .dock-header')!, selectLevel);
+
+cameraHint.onVisibility = (visible) => {
+  viewportBar.setCameraHint(visible);
+};
 
 preview.onStats = (stats) => {
   levelsPanel.renderStats(stats);
 };
+
+gpuTimer.onTime = (milliseconds) => {
+  levelsPanel.renderGpuTime(milliseconds);
+};
+frameRate.onRate = (fps) => {
+  levelsPanel.renderFrameRate(fps);
+};
+levelsPanel.setRenderer(getRendererInfo(renderer), gpuTimer.isSupported);
 
 let lodCache: LODCache | null = null;
 let snapshot: Snapshot | null = null;
@@ -113,6 +128,28 @@ resize();
 initFileDrop();
 renderModelTabs();
 document.addEventListener('keydown', onHistoryKey);
+initShortcuts({
+  onLevel: (level) => {
+    if (snapshot !== null && level < snapshot.lod.levels.length) selectLevel(level);
+  },
+  onLayout: () => {
+    viewportBar.nextLayout();
+  },
+  onIsolate: () => {
+    viewportBar.toggleIsolate();
+  },
+  onColorByLevel: () => {
+    viewportBar.toggleColorByLevel();
+  },
+  onForce: () => {
+    viewportBar.nextForcedLevel();
+  },
+  onResetCamera: () => {
+    viewportBar.resetCamera();
+  },
+  onPlay: togglePlay,
+  onLegend: toggleCameraHint
+});
 
 await Promise.all([simplifyReady(), prepareInstancedRenderer(renderer)]);
 
@@ -307,6 +344,7 @@ async function loadWithStatus(text: string, load: () => Promise<Model>, onError:
     toolbar.setModelsDisabled(false);
     status.hidden = true;
     emptyNote.hidden = !app.classList.contains('is-empty');
+    if (emptyNote.hidden) cameraHint.showFirstTime();
   }
 }
 
@@ -349,7 +387,7 @@ function showModel(model: Model): void {
   renderModelTabs();
   view.clip = randomClip;
   view.forcedLevel = -1;
-  toolbar.setModel(model);
+  transport.setModel(model);
   viewportBar.setModel(model);
   preview.setClip(randomClip);
   inspector.render(model);
@@ -378,18 +416,27 @@ function frame(time: number): void {
   const delta = lastTime === 0 ? 0 : Math.min((time - lastTime) / 1000, maxDelta);
 
   lastTime = time;
+  gpuTimer.poll();
 
   if (view.playing && preview.isAnimated) {
     preview.advance(delta);
     needsRender = true;
   }
 
+  if (preview.updateFlip(time)) needsRender = true;
+  if (controls.update(delta)) needsRender = true;
+
+  frameRate.tick(time, needsRender);
+
   if (!needsRender) return;
 
   needsRender = false;
   camera.updateMatrixWorld();
   preview.cull(camera);
+  gpuTimer.begin();
   renderer.render(scene, camera);
+  gpuTimer.end();
+  transitionLabels.update(camera, viewport.clientWidth, viewport.clientHeight);
 }
 
 function requestRender(): void {
@@ -409,11 +456,10 @@ function resize(): void {
 
   if (height === viewportHeight) return;
 
-  const isFirst = viewportHeight === 0;
+  const wasHidden = viewportHeight === 0;
 
   viewportHeight = height;
-
-  if (!isFirst) scheduleUpdate(resizeDelay);
+  scheduleUpdate(wasHidden ? 0 : resizeDelay);
 }
 
 function scheduleUpdate(delay = updateDelay): void {
@@ -448,6 +494,7 @@ function update(): void {
   if (view.forcedLevel >= count) view.forcedLevel = -1;
 
   buildPreview(snapshot);
+  inspector.setSnapshot(snapshot);
   levelsPanel.render(snapshot);
   dock.render(snapshot);
   viewportBar.setLevelsCount(count);
@@ -490,7 +537,7 @@ function getLOD(model: Model, modelSettings: ModelSettings): GeometryLOD {
 
 function buildPreview(current: Snapshot): void {
   const levels = getLevels(settings);
-  const key = JSON.stringify([current.thresholds, current.used, levels.map((level) => level.hysteresis), settings.instances, settings.spread, settings.environment, settings.layout, settings.shading, view.forcedLevel]);
+  const key = JSON.stringify([current.thresholds, current.used, levels.map((level) => level.hysteresis), settings.instances, settings.spread, settings.environment, settings.layout, settings.transitionView, settings.fov, settings.shading, view.forcedLevel]);
   const geometries = current.lod.levels.map((level) => level.geometry);
   const isSameGeometries = geometries.length === builtGeometries.length && geometries.every((geometry, i) => geometry === builtGeometries[i]);
 
@@ -505,13 +552,56 @@ function buildPreview(current: Snapshot): void {
   preview.setColorByLevel(settings.colorByLevel);
   preview.setFlatShading(settings.flatShading);
   preview.setHighlightedLevel(getHighlightedLevel());
+  preview.setFocusLevel(view.selectedLevel);
+  showTransitionLabels(current);
+  lockCamera(settings.layout === 'transitions');
 
-  const nextCameraKey = JSON.stringify([current.model.id, settings.layout, current.lod.levels.length, settings.instances, settings.spread, settings.fov]);
+  const transitionsKey = settings.layout === 'transitions' ? [current.thresholds, current.used, settings.transitionView, viewportHeight] : null;
+  const nextCameraKey = JSON.stringify([current.model.id, settings.layout, current.lod.levels.length, settings.instances, settings.spread, settings.fov, transitionsKey]);
 
   if (nextCameraKey === cameraKey) return;
 
   cameraKey = nextCameraKey;
   resetCamera();
+}
+
+/**
+ * Labels every switch of the Transitions layout with its size on screen and the triangles it saves, or hides the labels in the other
+ * layouts.
+ */
+function showTransitionLabels(current: Snapshot): void {
+  if (settings.layout !== 'transitions') {
+    transitionLabels.hide();
+
+    return;
+  }
+
+  const levels = current.lod.levels;
+  const labels = preview.transitions.map((transition) => {
+    const saved = 1 - getTriangles(levels[transition.to].geometry) / getTriangles(levels[transition.from].geometry);
+    const pixels = Math.round(transition.screenSize * viewportHeight);
+
+    return { anchor: transition.anchor, from: transition.from, to: transition.to, detail: `${formatPercent(transition.screenSize)} · ${pixels} px · −${formatPercent(saved)} tri` };
+  });
+
+  transitionLabels.show(labels, preview.focusedTransition);
+}
+
+/**
+ * Moves the camera to the switch at `index` of the Transitions layout, by selecting the level it switches to.
+ */
+function focusTransition(index: number): void {
+  const transition = preview.transitions.at(index);
+
+  if (transition !== undefined) selectLevel(transition.to);
+}
+
+/**
+ * Locks the camera in the Transitions layout, so that the switches always keep their real size on screen.
+ */
+function lockCamera(isLocked: boolean): void {
+  controls.enabled = !isLocked;
+  app.classList.toggle('is-camera-locked', isLocked);
 }
 
 /**
@@ -551,38 +641,21 @@ function applyFov(): void {
   camera.updateProjectionMatrix();
 }
 
-function onWheel(event: WheelEvent): void {
-  event.preventDefault();
-
-  const lines = event.deltaMode === 1 ? 33 : event.deltaMode === 2 ? 800 : 1;
-  const amount = -event.deltaY * lines * wheelStep * (event.shiftKey ? 4 : 1);
-
-  camera.getWorldDirection(wheelForward);
-  wheelForward.y = 0;
-
-  if (wheelForward.lengthSq() < 1e-6) {
-    wheelForward.set(0, 0, -1).applyQuaternion(camera.quaternion);
-    wheelForward.y = 0;
-  }
-
-  wheelForward.normalize().multiplyScalar(amount);
-  camera.position.add(wheelForward);
-  controls.target.add(wheelForward);
-  controls.update();
-  requestRender();
+function toggleCameraHint(): void {
+  cameraHint.toggle();
 }
 
 function resetCamera(): void {
   const defaultView = preview.getDefaultView(camera);
 
-  wheelStep = defaultView.far / 40000;
+  controls.setScale(defaultView.position.distanceTo(defaultView.target));
+  controls.minHeight = defaultView.far / 4000;
+  controls.maxDistance = defaultView.far / 2;
 
-  camera.position.copy(defaultView.position);
   camera.far = defaultView.far;
   camera.near = defaultView.far / 20000;
   camera.updateProjectionMatrix();
-  controls.target.copy(defaultView.target);
-  controls.update();
+  controls.setView(defaultView.position, defaultView.target);
   requestRender();
 }
 
@@ -596,6 +669,11 @@ function selectLevel(level: number): void {
 
   levelNav.update(level, snapshot.lod.levels.length);
   inspector.render(snapshot.model);
+
+  if (!preview.setFocusLevel(level) || settings.layout !== 'transitions') return;
+
+  transitionLabels.setFocus(preview.focusedTransition);
+  resetCamera();
 }
 
 function hoverLevel(level: number): void {
@@ -651,7 +729,15 @@ function removeLevel(): void {
 
 function togglePlay(): void {
   view.playing = !view.playing;
-  toolbar.setPlaying(view.playing);
+  transport.setPlaying(view.playing);
+}
+
+/**
+ * Selects the level a warning is about and points at the setting that causes it.
+ */
+function showWarning(warning: Warning): void {
+  if (warning.level >= 0) selectLevel(warning.level);
+  if (warning.field !== undefined) inspector.highlight(warning.field);
 }
 
 function selectClip(clip: number): void {
@@ -684,12 +770,24 @@ async function measureBuildTime(): Promise<void> {
   levelsPanel.setBuildTime('Measuring…', true);
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  const start = performance.now();
   const modelSettings = getModelSettings(settings);
-  const lod = simplifyGeometry(model.geometry, modelSettings.levels, modelSettings);
+  const levels = modelSettings.levels;
+  const start = performance.now();
+  const lod = simplifyGeometry(model.geometry, levels, modelSettings);
+  const total = performance.now() - start;
+  const times: number[] = [];
 
-  levelsPanel.setBuildTime(formatTime(performance.now() - start));
   disposeLOD(lod, model.geometry);
+
+  for (const level of levels) {
+    const levelStart = performance.now();
+    const levelLOD = simplifyGeometry(model.geometry, [level], modelSettings);
+
+    times.push(performance.now() - levelStart);
+    disposeLOD(levelLOD, model.geometry);
+  }
+
+  levelsPanel.setBuildTime(formatTime(total), false, times);
 }
 
 function undo(): void {

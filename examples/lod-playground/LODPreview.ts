@@ -20,7 +20,7 @@ import { isShadingAvailable, type Model } from './Models.js';
 import { getModelSettings, instanceSpacing, type Settings, type ShadingMode } from './Settings.js';
 import { getTriangles, type GeometryLOD } from './Simplification.js';
 import { randomClip } from './State.js';
-import type { FieldLayout } from './Thresholds.js';
+import { getSwitchScreenSize, type FieldLayout } from './Thresholds.js';
 
 export interface PreviewStats {
   instancesPerLevel: Uint32Array;
@@ -45,6 +45,20 @@ export interface PreviewInput {
   forcedLevel: number;
 }
 
+/**
+ * A switch between two levels in the Transitions layout.
+ */
+export interface PreviewTransition {
+  from: number;
+  to: number;
+  /** Size on screen of the switch, as a fraction of the viewport height. */
+  screenSize: number;
+  /** Top of the bounding spheres of the switch, where its label goes. */
+  anchor: Vector3;
+  /** Center of the bounding spheres of the switch, where the camera looks when the switch is focused. */
+  center: Vector3;
+}
+
 export const levelColors = ['#9aa3ad', '#4fd1a5', '#b78cff', '#e86fd0', '#a8d65a', '#3cc8d8', '#f59a7a', '#2fae8f', '#d3a6ff'];
 
 const dimColor = new Color('#2c2f35');
@@ -57,6 +71,19 @@ const checkerCells = 8;
 const clipSeed = 0.5;
 const gridDivisions: [number, number] = [8, 160];
 const farScale = 8;
+/** Camera distance of the Transitions layout, in mesh radii: the levels are scaled to their switch size at this distance. */
+const transitionDistance = 10;
+/** Gap between the two levels of a switch, as a fraction of their size. */
+const pairGap = 0.12;
+/** Gap between two switches, as a fraction of the size of the next one and of the view height. */
+const transitionGap: [number, number] = [0.35, 0.04];
+/** Smallest distance between the centers of two switches, as a fraction of the view height, so that their labels do not overlap. */
+const minTransitionSpacing = 0.24;
+/** Angle above the horizon of the Transitions camera, enough for the orbit controls to accept it. */
+const transitionPitch = 0.03;
+/** Time each level of a switch stays on screen in the Flip view, in milliseconds. */
+const flipPeriod = 600;
+const transitionSeed = 1000;
 
 /**
  * Returns the shading drawn for the model: `shading`, or clay when the model does not support it.
@@ -85,6 +112,11 @@ export class LODPreview {
   private instanceLevels = new Int8Array(0);
   private instanceColors = new Uint8Array(0);
   private phases = new Float32Array(0);
+  private seeds = new Float32Array(0);
+  private transitionsList: PreviewTransition[] = [];
+  private focusLevel = 1;
+  private isFlip = false;
+  private flipPhase = 0;
   private stats: PreviewStats = { instancesPerLevel: new Uint32Array(1), drawnTriangles: 0, fullTriangles: 0 };
   private colorByLevel = true;
   private highlightedLevel = noLevel;
@@ -115,6 +147,7 @@ export class LODPreview {
     this.setMaterialShading(input.settings.flatShading || input.model.morph !== null);
 
     if (input.settings.layout === 'levels') this.buildLevelsLayout(input);
+    else if (input.settings.layout === 'transitions') this.buildTransitionsLayout(input);
     else this.buildDistanceLayout(input);
 
     for (const mesh of this.meshes) this.scene.add(mesh);
@@ -131,6 +164,52 @@ export class LODPreview {
 
   getDefaultView(camera: PerspectiveCamera): DefaultView {
     return this.getView(camera);
+  }
+
+  /**
+   * The switches shown by the Transitions layout, empty in the other layouts.
+   */
+  get transitions(): readonly PreviewTransition[] {
+    return this.transitionsList;
+  }
+
+  /**
+   * Index in `transitions` of the switch that the default view of the Transitions layout centers, -1 without switches.
+   */
+  get focusedTransition(): number {
+    const transitions = this.transitionsList;
+
+    for (let i = 0; i < transitions.length; i++) {
+      if (transitions[i].to >= this.focusLevel) return i;
+    }
+
+    return transitions.length - 1;
+  }
+
+  /**
+   * Sets the level whose switch the default view of the Transitions layout centers. Returns whether that switch changed.
+   */
+  setFocusLevel(level: number): boolean {
+    const previous = this.focusedTransition;
+
+    this.focusLevel = level;
+
+    return this.focusedTransition !== previous;
+  }
+
+  /**
+   * Alternates the two levels of every switch in the Flip view, with `time` in milliseconds. Returns whether the drawn levels changed.
+   */
+  updateFlip(time: number): boolean {
+    if (!this.isFlip) return false;
+
+    const phase = Math.floor(time / flipPeriod) % 2;
+
+    if (phase === this.flipPhase) return false;
+
+    this.setFlipPhase(phase);
+
+    return true;
   }
 
   setColorByLevel(value: boolean): void {
@@ -180,7 +259,9 @@ export class LODPreview {
   cull(camera: Camera): void {
     this.resetStats();
 
-    for (const mesh of this.meshes) mesh.performFrustumCulling(camera, camera);
+    for (const mesh of this.meshes) {
+      if (mesh.visible) mesh.performFrustumCulling(camera, camera);
+    }
 
     this.onStats?.(this.stats);
   }
@@ -193,6 +274,9 @@ export class LODPreview {
     this.instanceLevels = new Int8Array(0);
     this.instanceColors = new Uint8Array(0);
     this.phases = new Float32Array(0);
+    this.seeds = new Float32Array(0);
+    this.transitionsList = [];
+    this.isFlip = false;
   }
 
   private buildDistanceLayout(input: PreviewInput): void {
@@ -254,6 +338,78 @@ export class LODPreview {
     this.getView = (camera) => getRowView(count * spacing, center.y, radius, camera);
   }
 
+  /**
+   * Shows every switch between two used levels, with both levels scaled so that, seen from `transitionDistance` radii, they are as tall
+   * on screen as when the switch happens. The switches stand in a row, from the first one, the largest, to the last one.
+   */
+  private buildTransitionsLayout(input: PreviewInput): void {
+    const { lod, settings } = input;
+    const distance = lod.radius * transitionDistance;
+    const viewHeight = 2 * distance * Math.tan((settings.fov * Math.PI) / 360);
+    const isFlip = settings.transitionView === 'flip';
+    const transitions = getTransitionList(input);
+    const sizes = transitions.map((transition) => transition.screenSize * viewHeight);
+    const widths = sizes.map((size) => (isFlip ? size : size * (2 + pairGap)));
+    let x = 0;
+
+    for (let i = 0; i < sizes.length; i++) x += widths[i] + (i === 0 ? 0 : getTransitionGap(sizes[i], widths[i - 1] + widths[i], viewHeight));
+
+    const totalWidth = x;
+
+    this.levelMap = [];
+    this.meshes = [];
+    this.transitionsList = transitions;
+    this.isFlip = isFlip;
+    x = -totalWidth / 2;
+
+    for (let i = 0; i < transitions.length; i++) {
+      if (i > 0) x += getTransitionGap(sizes[i], widths[i - 1] + widths[i], viewHeight);
+
+      this.addTransition(input, transitions[i], x + widths[i] / 2, sizes[i], isFlip ? 0 : sizes[i] * (1 + pairGap) / 2, i);
+      x += widths[i];
+    }
+
+    if (isFlip) this.setFlipPhase(0);
+
+    this.setGrid(Math.max(totalWidth * 1.4, viewHeight * 3), viewHeight / 10, 0);
+    this.getView = () => getTransitionView(this.transitionsList.at(this.focusedTransition) ?? null, distance, Math.max(totalWidth, distance));
+  }
+
+  /**
+   * Adds the two levels of `transition` around `x`, `offset` apart from it, with diameter `size`, and places its label and focus point.
+   */
+  private addTransition(input: PreviewInput, transition: PreviewTransition, x: number, size: number, offset: number, index: number): void {
+    const center = input.lod.levels[0].geometry.boundingSphere!.center;
+    const scale = size / (2 * input.lod.radius);
+    const centerY = center.y * scale;
+
+    this.addTransitionLevel(input.geometries[transition.from], transition.from, x - offset - center.x * scale, -center.z * scale, scale, index);
+    this.addTransitionLevel(input.geometries[transition.to], transition.to, x + offset - center.x * scale, -center.z * scale, scale, index);
+    transition.center.set(x, centerY, 0);
+    transition.anchor.set(x, centerY + size / 2, 0);
+  }
+
+  private addTransitionLevel(geometry: BufferGeometry, level: number, x: number, z: number, scale: number, index: number): void {
+    const mesh = this.createMesh(geometry, 1, false);
+
+    mesh.addInstances(1, (instance) => {
+      instance.position.set(x, 0, z);
+      instance.scale.setScalar(scale);
+    });
+
+    this.setupInstances(mesh, 1, level, transitionSeed + index);
+    this.meshes.push(mesh);
+  }
+
+  /**
+   * Shows the finer level of every switch for phase 0 and the coarser one for phase 1: the meshes alternate between the two.
+   */
+  private setFlipPhase(phase: number): void {
+    this.flipPhase = phase;
+
+    for (let i = 0; i < this.meshes.length; i++) this.meshes[i].visible = i % 2 === phase;
+  }
+
   private createMesh(geometry: BufferGeometry, capacity: number, useDistanceForLOD: boolean): InstancedMesh2 {
     const input = this.input!;
     const mesh = new InstancedMesh2(geometry, this.material, { capacity, useDistanceForLOD });
@@ -271,23 +427,30 @@ export class LODPreview {
   }
 
   /**
-   * Gives every instance a random animation phase and a color slot. `fixedLevel` is the level drawn by every instance of the mesh, or
-   * -1 when the mesh picks it.
+   * Gives every instance a random animation phase and clip, from consecutive seeds starting at `seed`, and a color slot. Instances with the
+   * same seed play the same animation in sync. `fixedLevel` is the level drawn by every instance of the mesh, or -1 when the mesh picks
+   * it.
    */
-  private setupInstances(mesh: InstancedMesh2, count: number, fixedLevel: number): void {
+  private setupInstances(mesh: InstancedMesh2, count: number, fixedLevel: number, seed = this.instanceLevels.length): void {
     const offset = this.instanceLevels.length;
     const levels = new Int8Array(offset + count).fill(fixedLevel);
     const colors = new Uint8Array(offset + count).fill(uncolored);
     const phases = new Float32Array(offset + count);
+    const seeds = new Float32Array(offset + count);
 
     levels.set(this.instanceLevels);
     phases.set(this.phases);
+    seeds.set(this.seeds);
 
-    for (let i = offset; i < offset + count; i++) phases[i] = random(i) * 10;
+    for (let i = offset; i < offset + count; i++) {
+      seeds[i] = seed + i - offset;
+      phases[i] = random(seeds[i]) * 10;
+    }
 
     this.instanceLevels = levels;
     this.instanceColors = colors;
     this.phases = phases;
+    this.seeds = seeds;
 
     mesh.userData['offset'] = offset;
     mesh.onFrustumEnter = (id, _camera, _cameraLOD, lodIndex) => {
@@ -322,7 +485,7 @@ export class LODPreview {
 
         for (let id = 0; id < mesh.instancesCount; id++) {
           const index = offset + id;
-          const clip = this.clip === randomClip ? Math.floor(random(index + clipSeed) * clipCount) : fixedClip;
+          const clip = this.clip === randomClip ? Math.floor(random(this.seeds[index] + clipSeed) * clipCount) : fixedClip;
 
           mesh.playAnimationAt(id, clip, this.phases[index] % skin.bake.getClipDuration(clip));
         }
@@ -362,7 +525,7 @@ export class LODPreview {
 
   private updateInstanceColor(mesh: InstancedMesh2, id: number, index: number, level: number): void {
     const dim = this.highlightedLevel !== noLevel && level !== this.highlightedLevel ? 1 : 0;
-    const byLevel = this.colorByLevel && this.isClay;
+    const byLevel = this.colorByLevel && this.isClay && !this.isFlip;
     const slot = byLevel ? level * 2 + dim : dim;
 
     if (this.instanceColors[index] === slot) return;
@@ -448,6 +611,45 @@ function getRowView(width: number, centerY: number, radius: number, camera: Pers
     target: new Vector3(0, centerY, 0),
     far: distance * farScale * 4
   };
+}
+
+/**
+ * Returns the switches between consecutive used levels, with their size on screen. The positions are set when the layout places them.
+ */
+function getTransitionList(input: PreviewInput): PreviewTransition[] {
+  const { lod, thresholds, used, settings } = input;
+  const modelSettings = getModelSettings(settings);
+  const transitions: PreviewTransition[] = [];
+  let from = 0;
+
+  for (let to = 1; to < lod.levels.length; to++) {
+    if (!used[to - 1]) continue;
+
+    const screenSize = getSwitchScreenSize(thresholds[to - 1], lod.radius, modelSettings, settings.fov);
+
+    transitions.push({ from, to, screenSize, anchor: new Vector3(), center: new Vector3() });
+    from = to;
+  }
+
+  return transitions;
+}
+
+/**
+ * Returns the gap before a switch of diameter `size`, with `widths` the widths of the switch and of the previous one: proportional to the
+ * size, and enough to keep the centers of two small switches far apart for their labels.
+ */
+function getTransitionGap(size: number, widths: number, viewHeight: number): number {
+  return Math.max(size * transitionGap[0] + viewHeight * transitionGap[1], viewHeight * minTransitionSpacing - widths / 2);
+}
+
+/**
+ * Places the camera `distance` in front of the focused switch, slightly above it, so that every switch has its real size on screen.
+ */
+function getTransitionView(focus: PreviewTransition | null, distance: number, width: number): DefaultView {
+  const target = focus === null ? new Vector3() : focus.center.clone();
+  const position = new Vector3(target.x, target.y + distance * Math.sin(transitionPitch), distance * Math.cos(transitionPitch));
+
+  return { position, target, far: Math.max(width, distance) * farScale };
 }
 
 /**

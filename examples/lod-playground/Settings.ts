@@ -4,7 +4,9 @@ export type ModelId = string;
 export type VerticesMode = 'reordered' | 'shared' | 'compact';
 export type ThresholdMode = 'pixelError' | 'screenSize' | 'distance';
 export type CodeLanguage = 'ts' | 'js';
-export type PreviewLayout = 'distance' | 'levels';
+export type PreviewLayout = 'distance' | 'levels' | 'transitions';
+/** How the Transitions layout compares the two levels of a switch: next to each other, or alternating in the same place. */
+export type TransitionView = 'pair' | 'flip';
 export type ShadingMode = 'clay' | 'uv' | 'material' | 'texture' | 'wireframe';
 export type SimplifyFlag = 'lockBorder' | 'sparse' | 'prune' | 'regularize' | 'regularizeLight' | 'permissive' | 'preserveFolds';
 
@@ -48,6 +50,7 @@ export interface Settings {
   /** Vertical field of view of the camera, in degrees. */
   fov: number;
   layout: PreviewLayout;
+  transitionView: TransitionView;
   shading: ShadingMode;
   colorByLevel: boolean;
   flatShading: boolean;
@@ -79,7 +82,8 @@ export function createDefaultSettings(): Settings {
     spread: 2.2,
     fov: 50,
     layout: 'distance',
-    shading: 'clay',
+    transitionView: 'pair',
+    shading: 'material',
     colorByLevel: true,
     flatShading: false,
     environment: true,

@@ -8,6 +8,7 @@ import { getModelSettings, type CodeLanguage, type Settings } from './Settings.j
 import type { Snapshot, ViewState } from './State.js';
 import { getSwitchDistance } from './Thresholds.js';
 import { descriptions } from './Tooltips.js';
+import type { Warning } from './Warnings.js';
 
 type DockTab = 'timeline' | 'memory' | 'code' | 'json' | 'warnings';
 type CodeTab = 'code' | 'json';
@@ -15,6 +16,7 @@ type CodeTab = 'code' | 'json';
 export interface BottomDockCallbacks {
   onSelect: (level: number) => void;
   onHover: (level: number) => void;
+  onWarning: (warning: Warning) => void;
   onLanguage: () => void;
 }
 
@@ -332,9 +334,9 @@ export class BottomDock {
       text.textContent = warning.text;
       button.prepend(createIcon());
       button.append(tag, text);
-      button.disabled = warning.level < 0;
+      button.disabled = warning.level < 0 && warning.field === undefined;
       button.addEventListener('click', () => {
-        this.callbacks.onSelect(warning.level);
+        this.callbacks.onWarning(warning);
       });
       item.append(button);
       items.push(item);

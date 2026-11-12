@@ -1,3 +1,5 @@
+import { icon } from './Icons.js';
+
 export interface NumberFieldOptions {
   label: string;
   tooltip: string;
@@ -5,6 +7,8 @@ export interface NumberFieldOptions {
   min: number;
   max: number;
   step: number;
+  /** Change of the − and + buttons, a multiple of `step`. Defaults to about a hundredth of the range. */
+  increment?: number;
   slider?: boolean;
   disabled?: boolean;
   onInput: (value: number) => void;
@@ -55,40 +59,103 @@ export function createNumberField(parent: HTMLElement, options: NumberFieldOptio
   const label = createLabel(options.label, options.tooltip, id);
   const control = createElement('div', 'field-control');
   const number = createElement('input', 'number');
+  const stepper = createElement('div', 'stepper');
+  const increment = options.increment ?? getIncrement(options);
+  const decrease = createStepButton('minus', `Decrease ${options.label} by ${formatInput(increment)}`);
+  const increase = createStepButton('plus', `Increase ${options.label} by ${formatInput(increment)}`);
+  let range: HTMLInputElement | null = null;
 
-  number.type = 'number';
+  const updateButtons = (value: number): void => {
+    decrease.disabled = options.disabled === true || value <= options.min;
+    increase.disabled = options.disabled === true || value >= options.max;
+  };
+
+  const setValue = (value: number): void => {
+    number.value = formatInput(value);
+    number.setAttribute('aria-valuenow', String(value));
+    if (range !== null) range.value = String(value);
+    updateButtons(value);
+  };
+
+  const stepBy = (direction: number): void => {
+    const parsed = parseInput(number.value);
+    const current = Number.isFinite(parsed) ? parsed : options.value;
+    const snapped = direction > 0 ? Math.floor(current / increment + 1e-6) : Math.ceil(current / increment - 1e-6);
+    const value = Number(Math.min(Math.max((snapped + direction) * increment, options.min), options.max).toPrecision(6));
+
+    setValue(value);
+    options.onInput(value);
+  };
+
+  decrease.addEventListener('click', () => {
+    stepBy(-1);
+  });
+  increase.addEventListener('click', () => {
+    stepBy(1);
+  });
+
+  number.type = 'text';
+  number.inputMode = 'decimal';
+  number.autocomplete = 'off';
+  number.spellcheck = false;
   number.id = id;
   number.dataset['key'] = options.label;
-  setRange(number, options);
+  number.setAttribute('role', 'spinbutton');
+  number.setAttribute('aria-valuemin', String(options.min));
+  number.setAttribute('aria-valuemax', String(options.max));
+  number.setAttribute('aria-valuenow', String(options.value));
   number.value = formatInput(options.value);
   number.disabled = options.disabled === true;
+  number.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+
+    event.preventDefault();
+    stepBy(event.key === 'ArrowUp' ? 1 : -1);
+  });
+  number.addEventListener('change', () => {
+    const parsed = parseInput(number.value);
+
+    setValue(Number.isFinite(parsed) ? Math.min(Math.max(parsed, options.min), options.max) : Number(range?.value ?? options.value));
+  });
 
   if (options.slider !== false) {
-    const range = createElement('input', 'range');
+    const slider = createElement('input', 'range');
 
-    range.type = 'range';
-    range.tabIndex = -1;
-    range.setAttribute('aria-hidden', 'true');
-    setRange(range, options);
-    range.value = String(options.value);
-    range.disabled = options.disabled === true;
-    range.addEventListener('input', () => {
-      number.value = formatInput(range.valueAsNumber);
-      options.onInput(range.valueAsNumber);
+    slider.type = 'range';
+    slider.tabIndex = -1;
+    slider.setAttribute('aria-hidden', 'true');
+    setRange(slider, options);
+    slider.value = String(options.value);
+    slider.disabled = options.disabled === true;
+    slider.addEventListener('input', () => {
+      setValue(slider.valueAsNumber);
+      options.onInput(slider.valueAsNumber);
     });
     number.addEventListener('input', () => {
-      range.value = number.value;
+      const parsed = parseInput(number.value);
+
+      if (Number.isFinite(parsed)) slider.value = String(parsed);
     });
-    control.append(range);
+    control.append(slider);
+    range = slider;
   }
 
   number.addEventListener('input', () => {
-    const value = number.valueAsNumber;
+    const value = parseInput(number.value);
 
-    if (Number.isFinite(value) && value >= options.min) options.onInput(Math.min(value, options.max));
+    if (!Number.isFinite(value)) return;
+
+    updateButtons(value);
+
+    if (value >= options.min) {
+      number.setAttribute('aria-valuenow', String(Math.min(value, options.max)));
+      options.onInput(Math.min(value, options.max));
+    }
   });
 
-  control.append(number);
+  updateButtons(options.value);
+  stepper.append(decrease, number, increase);
+  control.append(stepper);
   field.append(label, control);
   field.classList.toggle('is-disabled', options.disabled === true);
   parent.append(field);
@@ -212,6 +279,39 @@ function setRange(input: HTMLInputElement, options: NumberFieldOptions): void {
   input.step = String(options.step);
 }
 
+/**
+ * Returns the change of the − and + buttons: about a hundredth of the range, rounded to 1, 2 or 5 times a power of ten, and never finer
+ * than the step of the field.
+ */
+function getIncrement(options: NumberFieldOptions): number {
+  const raw = (options.max - options.min) / 100;
+  const power = 10 ** Math.floor(Math.log10(raw));
+  const fraction = raw / power;
+  const nice = (fraction < 1.5 ? 1 : fraction < 3.5 ? 2 : fraction < 7.5 ? 5 : 10) * power;
+
+  return Number((Math.max(Math.round(nice / options.step), 1) * options.step).toPrecision(6));
+}
+
+function createStepButton(name: 'minus' | 'plus', label: string): HTMLButtonElement {
+  const button = createElement('button', 'step-button');
+
+  button.type = 'button';
+  button.tabIndex = -1;
+  button.setAttribute('aria-label', label);
+  button.innerHTML = icon(name);
+
+  return button;
+}
+
 function formatInput(value: number): string {
   return String(Number(value.toPrecision(6)));
+}
+
+/**
+ * Reads a number typed with a dot or a comma as decimal separator, or NaN when the text is not a number.
+ */
+function parseInput(text: string): number {
+  const trimmed = text.trim().replace(',', '.');
+
+  return trimmed === '' ? NaN : Number(trimmed);
 }

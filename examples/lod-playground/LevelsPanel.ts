@@ -1,5 +1,6 @@
 import { createElement } from './Controls.js';
-import { formatCount, formatDecimal, formatDistance, formatPercent } from './Format.js';
+import { formatCount, formatDecimal, formatDistance, formatPercent, formatTime } from './Format.js';
+import type { RendererInfo } from './GpuTimer.js';
 import { icon } from './Icons.js';
 import { levelColors, type PreviewStats } from './LODPreview.js';
 import { getLevels, getModelSettings, maxLevels, type Settings } from './Settings.js';
@@ -33,7 +34,14 @@ export class LevelsPanel {
   private rows: HTMLButtonElement[] = [];
   private liveCells: HTMLElement[] = [];
   private liveValues: number[] = [];
+  private timeCells: HTMLElement[] = [];
+  private levelTimes: number[] = [];
   private drawnText = '';
+  private readonly gpuTime = createElement('span', 'frame-value');
+  private readonly rendererName = createElement('span', 'frame-value frame-renderer');
+  private readonly fps = createElement('span', 'frame-value');
+  private gpuText = '';
+  private fpsText = '';
 
   constructor(root: HTMLElement, settings: Settings, view: ViewState, callbacks: LevelsPanelCallbacks) {
     this.settings = settings;
@@ -48,7 +56,10 @@ export class LevelsPanel {
     const drawnRow = createElement('div', 'drawn');
     const drawnLabel = createElement('span', 'drawn-label');
     const drawnTrack = createElement('span', 'drawn-track');
-    const credits = createElement('p', 'credits');
+    const frameRow = createElement('div', 'frame');
+    const gpuLabel = createElement('span', 'drawn-label');
+    const fpsLabel = createElement('span', 'drawn-label');
+    const rendererLabel = createElement('span', 'drawn-label');
     const buildRow = createElement('div', 'build');
 
     title.textContent = 'Levels';
@@ -70,20 +81,24 @@ export class LevelsPanel {
       callbacks.onHover(-1);
     });
 
-    drawnLabel.textContent = 'Drawn';
+    drawnLabel.textContent = 'Triangles drawn';
     drawnLabel.dataset['tooltip'] = descriptions.drawn;
     drawnTrack.append(this.drawnBar);
     drawnRow.append(drawnLabel, this.drawn, drawnTrack);
-    credits.innerHTML = 'Simplified with <a href="https://github.com/zeux/meshoptimizer" target="_blank" rel="noopener">meshoptimizer</a>'
-      + ' · Imp and Puglin by <a href="https://quaternius.com" target="_blank" rel="noopener">Quaternius</a> (CC0)'
-      + ' · Horse by <a href="https://mirada.com/" target="_blank" rel="noopener">mirada</a> for <a href="http://www.ro.me" target="_blank" rel="noopener">ROME</a>,'
-      + ' from the <a href="https://threejs.org/examples/#webgl_morphtargets_horse" target="_blank" rel="noopener">three.js examples</a>';
+    gpuLabel.textContent = 'GPU render time';
+    gpuLabel.dataset['tooltip'] = descriptions.gpuTime;
+    fpsLabel.textContent = 'FPS';
+    fpsLabel.dataset['tooltip'] = descriptions.fps;
+    rendererLabel.textContent = 'Renderer';
+    this.gpuTime.textContent = '–';
+    this.fps.textContent = '–';
+    frameRow.append(gpuLabel, this.gpuTime, fpsLabel, this.fps, rendererLabel, this.rendererName);
     this.buildButton.type = 'button';
     this.buildButton.textContent = 'Measure build time';
     this.buildButton.dataset['tooltip'] = descriptions.measureBuild;
     this.buildButton.addEventListener('click', callbacks.onMeasure);
     buildRow.append(this.buildButton, this.buildTime);
-    footer.append(drawnRow, buildRow, credits);
+    footer.append(drawnRow, frameRow, buildRow);
     root.append(header, heads, this.list, this.settingsContainer, footer);
   }
 
@@ -96,6 +111,7 @@ export class LevelsPanel {
     this.rows = [];
     this.liveCells = [];
     this.liveValues = [];
+    this.timeCells = [];
 
     for (let level = 0; level < levels.length; level++) {
       const triangles = getTriangles(levels[level].geometry);
@@ -124,6 +140,12 @@ export class LevelsPanel {
         + `<span class="level-meta">${meta.join('')}</span>`;
       live.textContent = '0';
       row.insertBefore(live, row.children[3]);
+
+      const time = createElement('span', 'level-time');
+
+      time.dataset['tooltip'] = descriptions.levelBuildTime;
+      row.querySelector('.level-meta')!.append(time);
+      this.timeCells.push(time);
       row.addEventListener('click', () => {
         this.callbacks.onSelect(level);
       });
@@ -139,6 +161,9 @@ export class LevelsPanel {
       this.liveValues.push(0);
     }
 
+    for (let i = 1; i < this.timeCells.length; i++) this.renderLevelTime(i);
+
+    this.timeCells[0].hidden = true;
     this.list.replaceChildren(...this.rows.map((row) => row.parentElement!));
     this.count.textContent = String(levels.length);
     this.addButton.disabled = settingsCount >= maxLevels;
@@ -148,9 +173,20 @@ export class LevelsPanel {
   /**
    * Shows the result of the last build measurement, or clears it with an empty text when the settings change.
    */
-  setBuildTime(text: string, isMeasuring = false): void {
+  setBuildTime(text: string, isMeasuring = false, levelTimes: number[] = []): void {
     this.buildTime.textContent = text;
     this.buildButton.disabled = isMeasuring;
+    this.levelTimes = levelTimes;
+
+    for (let i = 1; i < this.timeCells.length; i++) this.renderLevelTime(i);
+  }
+
+  private renderLevelTime(level: number): void {
+    const cell = this.timeCells[level];
+    const time = this.levelTimes.at(level - 1);
+
+    cell.hidden = time === undefined;
+    cell.textContent = time === undefined ? '' : `build ${formatTime(time)}`;
   }
 
   select(level: number): void {
@@ -176,6 +212,34 @@ export class LevelsPanel {
     this.drawnText = text;
     this.drawn.textContent = text;
     this.drawnBar.style.width = `${Math.min(ratio, 1) * 100}%`;
+  }
+
+  renderGpuTime(milliseconds: number): void {
+    const text = milliseconds < 1 ? `${milliseconds.toFixed(2)} ms` : formatTime(milliseconds);
+
+    if (text === this.gpuText) return;
+
+    this.gpuText = text;
+    this.gpuTime.textContent = text;
+  }
+
+  renderFrameRate(fps: number): void {
+    const text = fps < 0 ? 'idle' : fps.toFixed(0);
+
+    if (text === this.fpsText) return;
+
+    this.fpsText = text;
+    this.fps.textContent = text;
+  }
+
+  setRenderer(info: RendererInfo, isTimerSupported: boolean): void {
+    this.rendererName.textContent = info.label;
+    this.rendererName.dataset['tooltip'] = info.detail;
+
+    if (isTimerSupported) return;
+
+    this.gpuTime.textContent = 'n/a';
+    this.gpuTime.dataset['tooltip'] = descriptions.gpuTimeUnavailable;
   }
 
   private onKeyDown(event: KeyboardEvent): void {

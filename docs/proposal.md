@@ -79,7 +79,17 @@ Proposal: a per-level `vertices: 'compact'` in `SimplifyGeometryLevelParams`, va
 
 # LOD playground
 
-Features removed from the playground until they are reliable. Each one needs an analysis and approval before it comes back.
+Playground features removed until they are reliable, or not started yet. Each one needs an analysis and approval before it is implemented.
+
+## Export levels as glTF
+
+Today the playground gives code and JSON that simplify the mesh at runtime. Some pipelines prefer to simplify offline and ship the levels as assets.
+
+Proposal: download the levels as one `.glb`, one mesh per level, with the skin, the morph targets and the switch thresholds in `extras`.
+
+- Doubtful fit: the playground is meant to tune the parameters, and the library already builds the levels at runtime in milliseconds.
+- With `reordered` or `shared` vertices the levels share one vertex buffer, which glTF can express with shared accessors; `compact` levels get their own.
+- The original materials and textures must be carried over, also from opened files.
 
 ## Bone influences per level
 

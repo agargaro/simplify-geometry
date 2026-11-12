@@ -1,10 +1,17 @@
 import { createChoice, createElement, createFlag, createNumberField, createSection, createToggle } from './Controls.js';
+import { formatCount, formatDecimal, formatPercent } from './Format.js';
 import { levelColors } from './LODPreview.js';
 import type { Model } from './Models.js';
 import { fovRange, getLevels, getModelSettings, instancesRange, simplifyFlags, spreadRange, type LevelSettings, type Settings, type ThresholdMode, type VerticesMode } from './Settings.js';
 import { canUpdateVertices, getTriangles, getVertices } from './Simplification.js';
-import type { ViewState } from './State.js';
+import type { Snapshot, ViewState } from './State.js';
 import { descriptions, flagDescriptions } from './Tooltips.js';
+
+const highlightDuration = 1600;
+const highlightKeyframes: Keyframe[] = [
+  { backgroundColor: 'rgba(230, 180, 80, 0.22)', boxShadow: '0 0 0 1px rgba(230, 180, 80, 0.8)' },
+  { backgroundColor: 'rgba(230, 180, 80, 0)', boxShadow: '0 0 0 1px rgba(230, 180, 80, 0)' }
+];
 
 /**
  * Edits the settings: the selected level and the simplification in the inspector, the switch and the scene under the levels list.
@@ -16,6 +23,9 @@ export class Inspector {
   private readonly view: ViewState;
   private readonly onChange: () => void;
   private model: Model | null = null;
+  private snapshot: Snapshot | null = null;
+  private result: HTMLElement | null = null;
+  private resultLevel = 0;
 
   constructor(container: HTMLElement, globalContainer: HTMLElement, settings: Settings, view: ViewState, onChange: () => void) {
     this.container = container;
@@ -33,6 +43,7 @@ export class Inspector {
     const focusContainer = active instanceof HTMLElement && this.globalContainer.contains(active) ? this.globalContainer : this.container;
 
     this.model = model;
+    this.result = null;
     this.container.replaceChildren();
     this.globalContainer.replaceChildren();
 
@@ -51,10 +62,67 @@ export class Inspector {
     if (focusKey !== undefined) focusContainer.querySelector<HTMLElement>(`[data-key="${CSS.escape(focusKey)}"]`)?.focus();
   }
 
+  /**
+   * Shows the triangles and the error that the selected level reached in `snapshot`, and what stopped its simplification.
+   */
+  setSnapshot(snapshot: Snapshot): void {
+    this.snapshot = snapshot;
+    this.renderResult();
+  }
+
+  /**
+   * Scrolls to the control whose `data-key` is `key` and flashes it, to point at the setting a warning is about.
+   */
+  highlight(key: string): void {
+    const control = this.container.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`);
+
+    if (control === null) return;
+
+    const target = control.closest<HTMLElement>('.field, .flag') ?? control;
+
+    target.scrollIntoView({ block: 'nearest' });
+    target.animate(highlightKeyframes, { duration: highlightDuration, easing: 'ease-out' });
+    control.focus({ preventScroll: true });
+  }
+
   private rerender(): void {
     if (this.model !== null) this.render(this.model);
 
     this.onChange();
+  }
+
+  private renderResult(): void {
+    const result = this.result;
+    const snapshot = this.snapshot;
+
+    if (result === null) return;
+
+    const levels = getLevels(this.settings);
+    const index = this.resultLevel;
+    const lodLevels = snapshot?.lod.levels;
+
+    if (snapshot === null || snapshot.model !== this.model || lodLevels === undefined || index >= lodLevels.length || index > levels.length) {
+      result.replaceChildren();
+
+      return;
+    }
+
+    const level = levels[index - 1];
+    const sourceTriangles = getTriangles(lodLevels[0].geometry);
+    const triangles = getTriangles(lodLevels[index].geometry);
+    const ratioTriangles = Math.floor(level.ratio * sourceTriangles);
+    const isRatioReached = level.ratio > 0 && triangles <= ratioTriangles;
+    const errorAbsolute = getModelSettings(this.settings).errorAbsolute;
+    let stop = 'Error target';
+
+    if (isRatioReached) stop = `Ratio target (${formatCount(ratioTriangles)} tri)`;
+    else if (level.ratio > 0) stop = `Error target, ratio ${formatCount(ratioTriangles)} tri not reached`;
+
+    result.replaceChildren(createFacts([
+      ['Result', `${formatCount(triangles)} tri · ${formatPercent(triangles / sourceTriangles)}`, descriptions.levelResult],
+      ['Error', `${formatError(lodLevels[index].error, errorAbsolute)} of ${formatError(level.error, errorAbsolute)}`, descriptions.levelResultError],
+      ['Stopped by', stop, descriptions.levelStop]
+    ]));
   }
 
   private renderSource(model: Model): void {
@@ -85,15 +153,19 @@ export class Inspector {
 
     swatch.style.background = levelColors[index % levelColors.length];
     heading.prepend(swatch);
+    this.result = createElement('div', 'level-result');
+    this.resultLevel = index;
+    body.append(this.result);
+    this.renderResult();
 
     createNumberField(body, {
-      label: 'Ratio', tooltip: descriptions.ratio, value: level.ratio, min: 0, max: 1, step: 0.001, onInput: (value) => {
+      label: 'Ratio', tooltip: descriptions.ratio, value: level.ratio, min: 0, max: 1, step: 0.001, increment: 0.005, onInput: (value) => {
         level.ratio = value;
         this.onChange();
       }
     });
     createNumberField(body, {
-      label: 'Error', tooltip: descriptions.error, value: level.error, min: 0, max: 1, step: 0.0005, onInput: (value) => {
+      label: 'Error', tooltip: descriptions.error, value: level.error, min: 0, max: 1, step: 0.0005, increment: 0.002, onInput: (value) => {
         level.error = value;
         this.onChange();
       }
@@ -122,7 +194,7 @@ export class Inspector {
 
     if (settings.thresholdMode === 'distance') {
       createNumberField(body, {
-        label: 'Distance', tooltip: descriptions.distance, value: level.distance, min: 0.1, max: 2000, step: 0.1, onInput: (value) => {
+        label: 'Distance', tooltip: descriptions.distance, value: level.distance, min: 0.1, max: 2000, step: 0.1, increment: 10, onInput: (value) => {
           level.distance = value;
           this.onChange();
         }
@@ -174,7 +246,7 @@ export class Inspector {
     if (settings.thresholdMode !== 'pixelError') return;
 
     createNumberField(body, {
-      label: 'Max error (px)', tooltip: descriptions.pixelError, value: settings.pixelError, min: 0.1, max: 16, step: 0.1, onInput: (value) => {
+      label: 'Max error (px)', tooltip: descriptions.pixelError, value: settings.pixelError, min: 0.1, max: 16, step: 0.05, increment: 0.05, onInput: (value) => {
         settings.pixelError = value;
         this.onChange();
       }
@@ -224,7 +296,7 @@ export class Inspector {
     const settings = this.settings;
 
     createNumberField(body, {
-      label: 'Instances', tooltip: descriptions.instances, value: settings.instances, min: instancesRange[0], max: instancesRange[1], step: 50, onInput: (value) => {
+      label: 'Instances', tooltip: descriptions.instances, value: settings.instances, min: instancesRange[0], max: instancesRange[1], step: 50, increment: 100, onInput: (value) => {
         settings.instances = clampCount(value, instancesRange);
         this.onChange();
       }
@@ -236,7 +308,7 @@ export class Inspector {
       }
     });
     createNumberField(body, {
-      label: 'FOV (°)', tooltip: descriptions.fov, value: settings.fov, min: fovRange[0], max: fovRange[1], step: 1, onInput: (value) => {
+      label: 'FOV (°)', tooltip: descriptions.fov, value: settings.fov, min: fovRange[0], max: fovRange[1], step: 1, increment: 5, onInput: (value) => {
         settings.fov = value;
         this.onChange();
       }
@@ -257,15 +329,25 @@ function clampCount(value: number, range: [number, number]): number {
   return Math.min(Math.max(Math.round(value), range[0]), range[1]);
 }
 
-function createFacts(rows: [string, string][]): HTMLElement {
+function formatError(error: number, errorAbsolute: boolean): string {
+  return errorAbsolute ? `${formatDecimal(error)} units` : formatPercent(error);
+}
+
+/**
+ * Returns a list of terms and values, with the tooltip of each term when given.
+ */
+function createFacts(rows: [string, string, string?][]): HTMLElement {
   const list = createElement('dl', 'facts');
 
-  for (const [term, value] of rows) {
+  for (const [term, value, tooltip] of rows) {
     const dt = createElement('dt');
     const dd = createElement('dd');
 
     dt.textContent = term;
     dd.textContent = value;
+
+    if (tooltip !== undefined) dt.dataset['tooltip'] = tooltip;
+
     list.append(dt, dd);
   }
 
