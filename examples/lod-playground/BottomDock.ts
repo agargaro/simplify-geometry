@@ -4,7 +4,7 @@ import { formatCount, formatDistance, formatPercent } from './Format.js';
 import { icon } from './Icons.js';
 import { levelColors } from './LODPreview.js';
 import { formatBytes, getMemoryReport } from './Memory.js';
-import type { CodeLanguage, Settings } from './Settings.js';
+import { getModelSettings, type CodeLanguage, type Settings } from './Settings.js';
 import type { Snapshot, ViewState } from './State.js';
 import { getSwitchDistance } from './Thresholds.js';
 import { descriptions } from './Tooltips.js';
@@ -266,7 +266,7 @@ export class BottomDock {
     for (let i = 0; i < thresholds.length; i++) {
       if (!used[i]) continue;
 
-      switches.push({ level: i + 1, start: getSwitchDistance(thresholds[i], lod.radius, this.settings, fov), end: 0 });
+      switches.push({ level: i + 1, start: getSwitchDistance(thresholds[i], lod.radius, getModelSettings(this.settings), fov), end: 0 });
     }
 
     const distances = Array.from(field.distances);

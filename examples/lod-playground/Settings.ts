@@ -1,5 +1,6 @@
 export type BuiltInModelName = 'imp' | 'puglin' | 'horse';
-export type ModelName = BuiltInModelName | 'custom';
+/** A built-in model, or `file-<n>` for a model opened from a file. */
+export type ModelId = string;
 export type VerticesMode = 'reordered' | 'shared' | 'compact';
 export type ThresholdMode = 'pixelError' | 'screenSize' | 'distance';
 export type CodeLanguage = 'ts' | 'js';
@@ -19,22 +20,30 @@ export interface LevelSettings extends LevelFlags {
   hysteresis: number;
 }
 
+/**
+ * Everything that defines the LOD of one model: its levels, how they are simplified and how instances switch between them.
+ */
 export interface ModelSettings {
   levels: LevelSettings[];
-}
-
-export interface Settings {
-  model: ModelName;
+  /** True while `levels` are placeholders, replaced by levels computed from the geometry when the model is shown. */
+  levelsPending: boolean;
   vertices: VerticesMode;
   errorAbsolute: boolean;
   protectNormalSeams: boolean;
   protectUvSeams: boolean;
   thresholdMode: ThresholdMode;
   pixelError: number;
-  models: Record<ModelName, ModelSettings>;
-  /** Instances scattered by the distance layout. */
+}
+
+/**
+ * The LOD of every model, in `models`, and the preview settings shared by all of them.
+ */
+export interface Settings {
+  model: ModelId;
+  models: Record<ModelId, ModelSettings>;
+  /** Instances scattered by the Crowd layout. */
   instances: number;
-  /** Smallest distance between two instances of the distance layout, in mesh radii. */
+  /** Smallest distance between two instances of the Crowd layout, in mesh radii. */
   spread: number;
   /** Vertical field of view of the camera, in degrees. */
   fov: number;
@@ -48,8 +57,7 @@ export interface Settings {
 }
 
 export const builtInModelNames: BuiltInModelName[] = ['imp', 'puglin', 'horse'];
-export const modelNames: ModelName[] = ['imp', 'puglin', 'horse', 'custom'];
-export const modelLabels: Record<ModelName, string> = { imp: 'Imp', puglin: 'Puglin', horse: 'Horse', custom: 'Custom' };
+export const modelLabels: Record<BuiltInModelName, string> = { imp: 'Imp', puglin: 'Puglin', horse: 'Horse' };
 export const simplifyFlags: SimplifyFlag[] = ['lockBorder', 'sparse', 'prune', 'regularize', 'regularizeLight', 'permissive', 'preserveFolds'];
 export const maxLevels = 8;
 export const instanceSpacing = 2.2;
@@ -57,26 +65,16 @@ export const instancesRange: [number, number] = [50, 5000];
 export const spreadRange: [number, number] = [1.2, 8];
 export const fovRange: [number, number] = [20, 90];
 
-const defaultErrors = [0.002, 0.005, 0.01, 0.02];
-const defaultScreenSizes = [0.8, 0.4, 0.2, 0.1];
-const defaultDistances = [5, 10, 20, 40];
+/** Errors of the placeholder levels, and the smallest errors tried by the levels computed from the geometry. */
+export const defaultErrors = [0.002, 0.005, 0.01, 0.02, 0.05];
+const firstScreenSize = 0.8;
+const firstDistance = 5;
 const defaultHysteresis = 0.1;
-/**
- * Levels from this error on default to permissive and regularize: far away, a seam that opens costs less than the triangles it saves,
- * and more regular triangles deform better under skinning.
- */
-const farLevelError = 0.01;
 
 export function createDefaultSettings(): Settings {
   return {
     model: 'imp',
-    vertices: 'reordered',
-    errorAbsolute: false,
-    protectNormalSeams: false,
-    protectUvSeams: false,
-    thresholdMode: 'pixelError',
-    pixelError: 0.7,
-    models: { imp: createModelSettings(), puglin: createModelSettings(), horse: createModelSettings(), custom: createModelSettings() },
+    models: { imp: createModelSettings(), puglin: createModelSettings(), horse: createModelSettings() },
     instances: 500,
     spread: 2.2,
     fov: 50,
@@ -90,53 +88,73 @@ export function createDefaultSettings(): Settings {
 }
 
 export function createModelSettings(): ModelSettings {
-  return { levels: createDefaultLevels() };
+  return {
+    levels: createPlaceholderLevels(),
+    levelsPending: true,
+    vertices: 'reordered',
+    errorAbsolute: false,
+    protectNormalSeams: false,
+    protectUvSeams: false,
+    thresholdMode: 'pixelError',
+    pixelError: 0.8
+  };
 }
 
-export function createDefaultLevels(): LevelSettings[] {
+/**
+ * Levels that do not depend on the geometry: used until the model is shown, and for the values missing from a file.
+ */
+export function createPlaceholderLevels(): LevelSettings[] {
   const levels: LevelSettings[] = [];
 
-  for (let i = 0; i < defaultErrors.length; i++) {
-    levels.push(createLevel(defaultErrors[i], defaultScreenSizes[i], defaultDistances[i]));
-  }
+  for (let i = 0; i < defaultErrors.length; i++) levels.push(createLevel(i, defaultErrors[i], 0));
 
   return levels;
 }
 
 /**
- * Creates the level that follows `previous`: coarser, used from a smaller screen size or a larger distance, with the same flags.
+ * Creates the level at `index` (0 is the first level after the source) with prune, regularize and permissive. The screen size halves and
+ * the distance doubles at every level.
  */
-export function createNextLevel(previous: LevelSettings | undefined): LevelSettings {
-  if (previous === undefined) return createLevel(defaultErrors[0], defaultScreenSizes[0], defaultDistances[0]);
-
+export function createLevel(index: number, error: number, ratio: number): LevelSettings {
   return {
-    ...previous,
-    ratio: previous.ratio / 2,
-    error: Math.min(previous.error * 2, 1),
-    screenSize: previous.screenSize / 2,
-    distance: previous.distance * 2
-  };
-}
-
-export function getLevels(settings: Settings): LevelSettings[] {
-  return settings.models[settings.model].levels;
-}
-
-function createLevel(error: number, screenSize: number, distance: number): LevelSettings {
-  return {
-    ratio: 0,
+    ratio,
     error,
     sloppy: false,
     updateVertices: false,
     lockBorder: false,
     sparse: false,
     prune: true,
-    regularize: error >= farLevelError,
+    regularize: true,
     regularizeLight: false,
-    permissive: error >= farLevelError,
+    permissive: true,
     preserveFolds: false,
-    screenSize,
-    distance,
+    screenSize: firstScreenSize / 2 ** index,
+    distance: firstDistance * 2 ** index,
     hysteresis: defaultHysteresis
   };
+}
+
+/**
+ * Creates the level that follows `previous` with `error` and `ratio`: used from a smaller screen size or a larger distance, with the same
+ * flags. Without `previous`, it is the first level with the default flags.
+ */
+export function createNextLevel(previous: LevelSettings | undefined, error: number, ratio: number): LevelSettings {
+  if (previous === undefined) return createLevel(0, error, ratio);
+
+  return { ...previous, ratio, error, screenSize: previous.screenSize / 2, distance: previous.distance * 2 };
+}
+
+/**
+ * The LOD settings of the shown model.
+ */
+export function getModelSettings(settings: Settings): ModelSettings {
+  return settings.models[settings.model];
+}
+
+export function getLevels(settings: Settings): LevelSettings[] {
+  return getModelSettings(settings).levels;
+}
+
+export function isBuiltInModel(id: ModelId): id is BuiltInModelName {
+  return (builtInModelNames as ModelId[]).includes(id);
 }

@@ -5,11 +5,13 @@ import {
   LinearInterpolant,
   Matrix3,
   MeshStandardMaterial,
+  PropertyBinding,
   type AnimationClip,
   type BindMode,
   type BufferGeometry,
   type InterleavedBufferAttribute,
   type Interpolant,
+  type LoadingManager,
   type KeyframeTrack,
   type Material,
   type Matrix4,
@@ -22,10 +24,11 @@ import {
 } from 'three';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
-import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import type { BuiltInModelName, ModelName, ShadingMode } from './Settings.js';
+import { parseModelFile, type FileSet, type ModelFile, type SourceFile } from './ModelFiles.js';
+import type { BuiltInModelName, ModelId, ShadingMode } from './Settings.js';
 
 export interface SkinData {
   skeleton: Skeleton;
@@ -45,7 +48,7 @@ export interface MorphData {
 export interface Model {
   /** Unique for every loaded model, also when a file replaces another one. */
   id: number;
-  name: ModelName;
+  name: ModelId;
   label: string;
   geometry: BufferGeometry;
   skin: SkinData | null;
@@ -56,12 +59,13 @@ export interface Model {
   textureMaterial: Material | null;
   /** What was changed or ignored to load the model. */
   notes: string[];
+  /** Object URLs of the resources read from the opened files. */
+  resourceUrls: string[];
 }
 
 type AnyAttribute = BufferAttribute | InterleavedBufferAttribute;
-
-const glbMagic = 0x46546c67;
-const jsonChunkType = 0x4e4f534a;
+/** The scene and the clips of a loaded file. */
+type Asset = Pick<ModelFile, 'scene' | 'animations'>;
 
 const bakeFramesPerSecond = 30;
 const horseHeight = 2;
@@ -76,15 +80,30 @@ const modelUrls: Record<BuiltInModelName, string> = {
 
 const builtInLabels: Record<BuiltInModelName, string> = { imp: 'Imp', puglin: 'Puglin', horse: 'Horse' };
 
-const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+let ktx2Loader: KTX2Loader | null = null;
+let dracoLoader: DRACOLoader | null = null;
+const loader = createGltfLoader();
 let nextId = 0;
 
 /**
  * Enables the KTX2 and Draco decoders, downloaded from jsDelivr when a file first needs them.
  */
 export function initModelLoaders(renderer: WebGLRenderer): void {
-  loader.setKTX2Loader(new KTX2Loader().setTranscoderPath(`${decodersUrl}basis/`).detectSupport(renderer));
-  loader.setDRACOLoader(new DRACOLoader().setDecoderPath(`${decodersUrl}draco/gltf/`));
+  ktx2Loader = new KTX2Loader().setTranscoderPath(`${decodersUrl}basis/`).detectSupport(renderer);
+  dracoLoader = new DRACOLoader().setDecoderPath(`${decodersUrl}draco/gltf/`);
+  loader.setKTX2Loader(ktx2Loader).setDRACOLoader(dracoLoader);
+}
+
+/**
+ * Creates a glTF loader with the Meshopt decoder and, once `initModelLoaders` ran, the KTX2 and Draco decoders.
+ */
+function createGltfLoader(manager?: LoadingManager): GLTFLoader {
+  const gltfLoader = new GLTFLoader(manager).setMeshoptDecoder(MeshoptDecoder);
+
+  if (ktx2Loader !== null) gltfLoader.setKTX2Loader(ktx2Loader);
+  if (dracoLoader !== null) gltfLoader.setDRACOLoader(dracoLoader);
+
+  return gltfLoader;
 }
 
 export function isShadingAvailable(model: Model, shading: ShadingMode): boolean {
@@ -102,18 +121,20 @@ export function disposeModel(model: Model): void {
   disposeMaterial(model.material);
 
   if (model.textureMaterial !== null) model.textureMaterial.dispose();
+
+  for (const url of model.resourceUrls) URL.revokeObjectURL(url);
 }
 
 export async function loadModel(name: BuiltInModelName): Promise<Model> {
-  const gltf = await loader.loadAsync(modelUrls[name]);
-  const source = findMeshes(gltf.scene)[0];
+  const asset = await loader.loadAsync(modelUrls[name]);
+  const source = findMeshes(asset.scene)[0];
   const material = getMaterial(source, source.geometry, []);
   const textureMaterial = createTextureMaterial(material, source.geometry);
 
   if (isSkinnedMesh(source)) {
-    const skin = createSkinData(gltf, source, source.geometry, []);
+    const skin = createSkinData(asset, source, source.geometry, []);
 
-    return { id: nextId++, name, label: builtInLabels[name], geometry: source.geometry, skin, morph: null, material, textureMaterial, notes: [] };
+    return { id: nextId++, name, label: builtInLabels[name], geometry: source.geometry, skin, morph: null, material, textureMaterial, notes: [], resourceUrls: [] };
   }
 
   const geometry = source.geometry;
@@ -121,47 +142,38 @@ export async function loadModel(name: BuiltInModelName): Promise<Model> {
   placeOnGround(geometry, horseHeight);
   geometry.computeVertexNormals();
 
-  const morph = createMorphData(gltf, geometry, []);
+  const morph = createMorphData(asset, geometry, []);
 
   if (morph === null) throw new Error('The horse model has no morph animation.');
 
-  return { id: nextId++, name, label: builtInLabels[name], geometry, skin: null, morph, material, textureMaterial, notes: [] };
+  return { id: nextId++, name, label: builtInLabels[name], geometry, skin: null, morph, material, textureMaterial, notes: [], resourceUrls: [] };
 }
 
 /**
- * Loads a GLB file. Skinned meshes win over the others; several meshes are merged into one geometry when they share their attributes
- * (and, when skinned, their skeleton and bind matrix). Every change made to fit the playground is listed in `notes`.
+ * Loads a model file (GLB, glTF, FBX, Collada, OBJ, STL or PLY), reading the resources it references from `files`. Skinned meshes win over the others; several meshes are merged into one
+ * geometry when they share their attributes (and, when skinned, their skeleton and bind matrix). Every change made to fit the playground is
+ * listed in `notes`.
  */
-export async function loadModelFile(file: File): Promise<Model> {
-  const gltf = await loader.parseAsync(checkGlb(await file.arrayBuffer()), '');
-  const meshes = findMeshes(gltf.scene);
-  const skinned = meshes.filter(isSkinnedMesh);
+export async function loadModelFile(source: SourceFile, files: FileSet): Promise<Model> {
   const notes: string[] = [];
-  const label = getFileLabel(file.name);
+  const asset = await parseModelFile(source, files, createGltfLoader, notes);
+  const meshes = findMeshes(asset.scene);
+  const skinned = meshes.filter(isSkinnedMesh);
+  const label = getFileLabel(source.file.name);
 
-  gltf.scene.updateMatrixWorld(true);
+  asset.scene.updateMatrixWorld(true);
 
-  if (skinned.length > 0) return createSkinnedModel(gltf, skinned, meshes.length - skinned.length, label, notes);
+  if (skinned.length > 0) return createSkinnedModel(asset, skinned, meshes.length - skinned.length, label, notes);
 
   const geometries = meshes.map((mesh) => transformGeometry(mesh.geometry.clone(), mesh.matrixWorld));
   const geometry = prepareGeometry(geometries, notes);
 
   placeOnGround(geometry, 0);
 
-  const morph = meshes.length === 1 ? createMorphData(gltf, geometry, notes) : null;
+  const morph = meshes.length === 1 ? createMorphData(asset, geometry, notes) : null;
   const material = getSharedMaterial(meshes, geometry, notes);
 
-  return { id: nextId++, name: 'custom', label, geometry, skin: null, morph, material, textureMaterial: createTextureMaterial(material, geometry), notes };
-}
-
-function checkGlb(buffer: ArrayBuffer): ArrayBuffer {
-  const view = new DataView(buffer);
-
-  if (buffer.byteLength < 20 || view.getUint32(0, true) !== glbMagic || view.getUint32(16, true) !== jsonChunkType) {
-    throw new Error('The file is not a GLB (binary glTF).');
-  }
-
-  return buffer;
+  return { ...createFileIds(), label, geometry, skin: null, morph, material, textureMaterial: createTextureMaterial(material, geometry), notes, resourceUrls: asset.urls };
 }
 
 /**
@@ -240,37 +252,81 @@ export function countInfluences(geometry: BufferGeometry): number {
   return count;
 }
 
-function createSkinnedModel(gltf: GLTF, meshes: SkinnedMesh[], staticCount: number, label: string, notes: string[]): Model {
-  const first = meshes[0];
+function createSkinnedModel(asset: ModelFile, meshes: SkinnedMesh[], staticCount: number, label: string, notes: string[]): Model {
+  const reference = meshes.find((mesh) => isAnimatedSkeleton(asset.scene, mesh.skeleton)) ?? meshes[0];
 
   for (const mesh of meshes) {
-    if (mesh.skeleton !== first.skeleton || !mesh.bindMatrix.equals(first.bindMatrix)) {
-      throw new Error('The skinned meshes of the file use different skeletons or bind matrices: only one skinned mesh, or several sharing them, are supported.');
+    if (!mesh.bindMatrix.equals(reference.bindMatrix)) {
+      throw new Error('The skinned meshes of the file use different bind matrices: only one skinned mesh, or several sharing it, are supported.');
     }
   }
 
   if (staticCount > 0) notes.push(`${staticCount} mesh${staticCount === 1 ? '' : 'es'} without skinning ${staticCount === 1 ? 'is' : 'are'} not shown.`);
 
-  const geometry = prepareGeometry(meshes.map((mesh) => mesh.geometry.clone()), notes);
+  const geometries = meshes.map((mesh) => remapSkinIndex(mesh.geometry.clone(), mesh.skeleton, reference.skeleton));
+  const geometry = prepareGeometry(geometries, notes);
 
   if (geometry.morphAttributes['position'] !== undefined) {
     geometry.morphAttributes = {};
     notes.push('The morph targets of the skinned mesh are removed: only one deformation is previewed.');
   }
 
-  const skin = createSkinData(gltf, first, geometry, notes);
+  const skin = createSkinData(asset, reference, geometry, notes);
   const material = getSharedMaterial(meshes, geometry, notes);
 
-  return { id: nextId++, name: 'custom', label, geometry, skin, morph: null, material, textureMaterial: createTextureMaterial(material, geometry), notes };
+  return { ...createFileIds(), label, geometry, skin, morph: null, material, textureMaterial: createTextureMaterial(material, geometry), notes, resourceUrls: asset.urls };
 }
 
-function createSkinData(gltf: GLTF, mesh: SkinnedMesh, geometry: BufferGeometry, notes: string[]): SkinData | null {
+/**
+ * Whether the clips, which bind their tracks by bone name, animate the bones of this skeleton. Some loaders (FBX) nest a copy of the bones
+ * under the animated ones: baking that copy would ignore the animation of its parents.
+ */
+function isAnimatedSkeleton(root: Object3D, skeleton: Skeleton): boolean {
+  return skeleton.bones.every((bone) => PropertyBinding.findNode(root, bone.name) === bone);
+}
+
+/**
+ * Rewrites the joint indices of a geometry from its skeleton to `target`, which must contain every bone (the same object, or one with the
+ * same name) with the same inverse. Some loaders (FBX) create one skeleton, with its own bones, per mesh.
+ */
+function remapSkinIndex(geometry: BufferGeometry, skeleton: Skeleton, target: Skeleton): BufferGeometry {
+  if (skeleton === target) return geometry;
+
+  const remap = new Uint16Array(skeleton.bones.length);
+
+  for (let i = 0; i < skeleton.bones.length; i++) {
+    const bone = skeleton.bones[i];
+    const index = target.bones.findIndex((other) => other === bone || (bone.name !== '' && other.name === bone.name));
+
+    if (index === -1 || !skeleton.boneInverses[i].equals(target.boneInverses[index])) {
+      throw new Error('The skinned meshes of the file use different skeletons: only meshes driven by the same bones are supported.');
+    }
+
+    remap[i] = index;
+  }
+
+  const skinIndex = toPlainAttribute(geometry.getAttribute('skinIndex'), 'skinIndex');
+  const array = skinIndex.array;
+
+  for (let i = 0; i < array.length; i++) array[i] = remap[array[i]];
+
+  geometry.setAttribute('skinIndex', skinIndex);
+
+  return geometry;
+}
+
+function createSkinData(asset: Asset, mesh: SkinnedMesh, geometry: BufferGeometry, notes: string[]): SkinData | null {
   const bake = new SkeletalAnimationBake(mesh.skeleton);
   const clipNames: string[] = [];
 
-  for (const clip of gltf.animations) {
+  for (const clip of asset.animations) {
+    if (!(clip.duration > 0) || clip.tracks.length === 0) {
+      notes.push(`The clip "${clip.name}" is empty and is skipped.`);
+      continue;
+    }
+
     try {
-      bake.addClip(gltf.scene, clip, bakeFramesPerSecond);
+      bake.addClip(asset.scene, clip, bakeFramesPerSecond);
       clipNames.push(formatClipName(clip.name));
     } catch {
       notes.push(`The clip "${clip.name}" could not be baked and is skipped.`);
@@ -293,12 +349,12 @@ function createSkinData(gltf: GLTF, mesh: SkinnedMesh, geometry: BufferGeometry,
   };
 }
 
-function createMorphData(gltf: GLTF, geometry: BufferGeometry, notes: string[]): MorphData | null {
+function createMorphData(asset: Asset, geometry: BufferGeometry, notes: string[]): MorphData | null {
   const targetsCount = geometry.morphAttributes['position']?.length ?? 0;
 
   if (targetsCount === 0) return null;
 
-  for (const clip of gltf.animations) {
+  for (const clip of asset.animations) {
     const track = findMorphTrack(clip);
 
     if (track === undefined) continue;
@@ -490,7 +546,16 @@ function formatClipName(name: string): string {
 }
 
 function getFileLabel(fileName: string): string {
-  const name = fileName.replace(/\.(glb|gltf)$/i, '');
+  const name = fileName.replace(/\.[^.]+$/, '');
 
   return name.length > maxLabelLength ? `${name.slice(0, maxLabelLength - 1)}…` : name;
+}
+
+/**
+ * Ids of a model opened from a file: `name` is unique in the session and keys its settings, its tab and its history.
+ */
+function createFileIds(): { id: number; name: ModelId } {
+  const id = nextId++;
+
+  return { id, name: `file-${id}` };
 }

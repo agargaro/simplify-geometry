@@ -179,7 +179,7 @@
     }
 
     .stage.is-dropping .viewport::after {
-      content: 'Drop a .glb file to open it';
+      content: 'Drop a model file to open it';
       position: absolute;
       inset: 8px;
       display: grid;
@@ -284,7 +284,57 @@
 
     .models .segment {
       height: 22px;
-      padding: 0 12px;
+      padding: 0 24px 0 12px;
+    }
+
+    .model-tab {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .model-remove {
+      position: absolute;
+      right: 4px;
+      display: grid;
+      place-items: center;
+      width: 16px;
+      height: 16px;
+      padding: 0;
+      border: 0;
+      border-radius: 2px;
+      background: none;
+      color: var(--muted);
+      opacity: 0;
+    }
+
+    .model-remove .icon {
+      width: 10px;
+      height: 10px;
+    }
+
+    .model-tab:hover .model-remove,
+    .model-remove:focus-visible,
+    .segment[aria-pressed='true'] + .model-remove {
+      opacity: 1;
+    }
+
+    .model-remove:hover:not(:disabled) {
+      background: var(--panel-3);
+      color: var(--text);
+    }
+
+    .model-remove:disabled {
+      visibility: hidden;
+    }
+
+    #app.is-empty .levels,
+    #app.is-empty .bottom,
+    #app.is-empty .inspector,
+    #app.is-empty .viewport-bar,
+    #app.is-empty .transport,
+    #app.is-empty .history {
+      visibility: hidden;
     }
 
     .segment:disabled,
@@ -1263,6 +1313,102 @@
       align-self: flex-start;
     }
 
+    .model-dialog {
+      width: min(520px, calc(100vw - 32px));
+      max-height: min(560px, calc(100vh - 32px));
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--panel);
+      color: var(--text);
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+    }
+
+    .model-dialog::backdrop {
+      background: rgba(8, 9, 11, 0.6);
+    }
+
+    .model-dialog form {
+      display: flex;
+      flex-direction: column;
+      max-height: inherit;
+    }
+
+    .model-dialog-title {
+      margin: 0;
+      padding: 14px 16px 4px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .model-dialog-summary {
+      margin: 0;
+      padding: 0 16px 12px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .model-dialog-list {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      border-block: 1px solid var(--line);
+      background: var(--bg);
+    }
+
+    .model-dialog-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 28px;
+      padding: 0 16px;
+      cursor: pointer;
+    }
+
+    .model-dialog-row:hover {
+      background: var(--panel-2);
+    }
+
+    .model-dialog-row input {
+      flex: none;
+      margin: 0;
+      accent-color: var(--accent);
+    }
+
+    .model-dialog-name {
+      flex: none;
+      font-family: var(--mono);
+      font-size: 11.5px;
+    }
+
+    .model-dialog-folder {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .model-dialog-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 10px 12px;
+    }
+
+    .model-dialog-actions .tool-button.primary {
+      border-color: var(--accent-line);
+      background: var(--accent-bg);
+      color: var(--text);
+    }
+
+    .model-dialog-actions .tool-button:disabled {
+      opacity: 0.45;
+      pointer-events: none;
+    }
+
     .tooltip {
       position: fixed;
       z-index: 20;
@@ -1343,6 +1489,7 @@
       <div id="viewport-bar" class="viewport-bar"></div>
       <div id="viewport" class="viewport">
         <p id="viewport-status" class="viewport-status">Loading…</p>
+        <p id="viewport-empty" class="viewport-status" hidden>No model. Open one, or drop a file here.</p>
       </div>
       <div id="error" class="error" role="alert" hidden>
         <svg class="icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

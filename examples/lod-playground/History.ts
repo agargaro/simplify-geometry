@@ -1,4 +1,4 @@
-import { modelNames, type ModelName, type ModelSettings, type Settings } from './Settings.js';
+import type { ModelId, ModelSettings, Settings } from './Settings.js';
 
 interface Change {
   key: string;
@@ -28,7 +28,7 @@ const maxEntries = 200;
  */
 export class History {
   private readonly settings: Settings;
-  private readonly histories = new Map<ModelName, ModelHistory>();
+  private readonly histories = new Map<ModelId, ModelHistory>();
   private state: State;
   private openEntry: Entry | null = null;
 
@@ -110,9 +110,9 @@ export class History {
   }
 
   /**
-   * Forgets the history of `model` and takes the current settings as the starting point, for example after a new file replaces it.
+   * Forgets the history of `model` and takes the current settings as the starting point, for example after a model is opened or removed.
    */
-  clear(model: ModelName): void {
+  clear(model: ModelId): void {
     this.histories.delete(model);
     this.state = readState(this.settings);
     this.openEntry = null;
@@ -124,7 +124,7 @@ export class History {
     for (const change of entry.changes) {
       const value: unknown = JSON.parse(isUndo ? change.before : change.after);
 
-      if (change.key.startsWith(modelKeyPrefix)) this.settings.models[change.key.slice(modelKeyPrefix.length) as ModelName] = value as ModelSettings;
+      if (change.key.startsWith(modelKeyPrefix)) this.settings.models[change.key.slice(modelKeyPrefix.length)] = value as ModelSettings;
       else target[change.key] = value;
     }
 
@@ -153,7 +153,7 @@ function readState(settings: Settings): State {
     state.set(key, JSON.stringify(settings[key]));
   }
 
-  for (const name of modelNames) state.set(modelKeyPrefix + name, JSON.stringify(settings.models[name]));
+  for (const id of Object.keys(settings.models)) state.set(modelKeyPrefix + id, JSON.stringify(settings.models[id]));
 
   return state;
 }

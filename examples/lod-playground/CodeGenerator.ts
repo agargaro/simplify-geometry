@@ -1,6 +1,6 @@
 import type { SimplifyGeometryLevelParams, SimplifyGeometryLODParams } from '@three.ez/simplify-geometry';
 import type { Model } from './Models.js';
-import { getLevels, type Settings } from './Settings.js';
+import { getModelSettings, type ModelSettings, type Settings } from './Settings.js';
 import { getLevelParams, getSharedFlags, getSimplifyParams } from './Simplification.js';
 
 interface CodeOptions {
@@ -12,25 +12,26 @@ interface CodeOptions {
 }
 
 export function generateCode(settings: Settings, model: Model): string {
-  const levels = getLevels(settings);
+  const modelSettings = getModelSettings(settings);
+  const levels = modelSettings.levels;
   const options: CodeOptions = {
     ts: settings.language === 'ts',
-    isPixelError: settings.thresholdMode === 'pixelError',
-    isDistance: settings.thresholdMode === 'distance',
+    isPixelError: modelSettings.thresholdMode === 'pixelError',
+    isDistance: modelSettings.thresholdMode === 'distance',
     hasHysteresis: levels.some((level) => level.hysteresis > 0),
     isSkinned: model.skin !== null
   };
   const lines: string[] = [];
   const sharedFlags = getSharedFlags(levels);
 
-  lines.push(...getImports(settings, options), '', 'await simplifyReady();', '');
-  lines.push(`const params${options.ts ? ': SimplifyGeometryLODParams' : ''} = ${formatParams(getSimplifyParams(settings, levels))};`, '');
-  lines.push(`const levels${options.ts ? ': SimplifyGeometryLevelParams[]' : ''} = ${formatLevels(getLevelParams(levels, sharedFlags, settings))};`, '');
-  lines.push(...getConstants(settings, options), '');
+  lines.push(...getImports(modelSettings, options), '', 'await simplifyReady();', '');
+  lines.push(`const params${options.ts ? ': SimplifyGeometryLODParams' : ''} = ${formatParams(getSimplifyParams(modelSettings, levels))};`, '');
+  lines.push(`const levels${options.ts ? ': SimplifyGeometryLevelParams[]' : ''} = ${formatLevels(getLevelParams(levels, sharedFlags, modelSettings))};`, '');
+  lines.push(...getConstants(modelSettings, options), '');
 
   if (options.isSkinned && options.ts) lines.push(...getSkinInterface(), '');
 
-  lines.push(...getCreateFunction(settings, options));
+  lines.push(...getCreateFunction(modelSettings, options));
 
   return lines.join('\n');
 }
@@ -39,16 +40,17 @@ export function generateCode(settings: Settings, model: Model): string {
  * Returns the parameters of `simplifyGeometryLOD` and the values that choose when each level is drawn, as JSON.
  */
 export function generateJson(settings: Settings): string {
-  const levels = getLevels(settings);
+  const modelSettings = getModelSettings(settings);
+  const levels = modelSettings.levels;
   const config: Record<string, unknown> = {
-    params: getSimplifyParams(settings, levels),
-    levels: getLevelParams(levels, getSharedFlags(levels), settings),
-    thresholdMode: settings.thresholdMode
+    params: getSimplifyParams(modelSettings, levels),
+    levels: getLevelParams(levels, getSharedFlags(levels), modelSettings),
+    thresholdMode: modelSettings.thresholdMode
   };
 
-  if (settings.thresholdMode === 'pixelError') config['maxPixelError'] = settings.pixelError;
-  if (settings.thresholdMode === 'screenSize') config['screenSizes'] = levels.map((level) => level.screenSize);
-  if (settings.thresholdMode === 'distance') config['distances'] = levels.map((level) => level.distance);
+  if (modelSettings.thresholdMode === 'pixelError') config['maxPixelError'] = modelSettings.pixelError;
+  if (modelSettings.thresholdMode === 'screenSize') config['screenSizes'] = levels.map((level) => level.screenSize);
+  if (modelSettings.thresholdMode === 'distance') config['distances'] = levels.map((level) => level.distance);
   if (levels.some((level) => level.hysteresis > 0)) config['hysteresis'] = levels.map((level) => level.hysteresis);
 
   return JSON.stringify(config, null, 2)
@@ -56,13 +58,13 @@ export function generateJson(settings: Settings): string {
     .replace(/\[\n\s+([^{}[\]]*?)\n\s*\]/g, (_match, body: string) => `[${body.split(/,\n\s+/).join(', ')}]`);
 }
 
-function getImports(settings: Settings, options: CodeOptions): string[] {
+function getImports(modelSettings: ModelSettings, options: CodeOptions): string[] {
   const instancedImports = ['InstancedMesh2'];
   const simplifyImports = ['simplifyGeometryLOD', 'simplifyReady'];
   const threeImports = ['BufferGeometry', 'Material'];
 
   if (options.isSkinned && options.ts) instancedImports.push('type SkeletalAnimationBake');
-  if (options.isPixelError && !settings.errorAbsolute) simplifyImports.unshift('getScale');
+  if (options.isPixelError && !modelSettings.errorAbsolute) simplifyImports.unshift('getScale');
   if (options.ts) simplifyImports.push('type SimplifyGeometryLevelParams', 'type SimplifyGeometryLODParams');
   if (options.isSkinned) threeImports.push('Matrix4', 'Skeleton');
 
@@ -76,12 +78,12 @@ function getImports(settings: Settings, options: CodeOptions): string[] {
   return lines;
 }
 
-function getConstants(settings: Settings, options: CodeOptions): string[] {
-  const levels = getLevels(settings);
+function getConstants(modelSettings: ModelSettings, options: CodeOptions): string[] {
+  const levels = modelSettings.levels;
   const lines: string[] = [];
 
-  if (options.isPixelError) lines.push(`const maxPixelError = ${formatNumber(settings.pixelError)};`);
-  if (settings.thresholdMode === 'screenSize') lines.push(`const screenSizes = [${levels.map((level) => formatNumber(level.screenSize)).join(', ')}];`);
+  if (options.isPixelError) lines.push(`const maxPixelError = ${formatNumber(modelSettings.pixelError)};`);
+  if (modelSettings.thresholdMode === 'screenSize') lines.push(`const screenSizes = [${levels.map((level) => formatNumber(level.screenSize)).join(', ')}];`);
   if (options.isDistance) lines.push(`const distances = [${levels.map((level) => formatNumber(level.distance)).join(', ')}];`);
   if (options.hasHysteresis) lines.push(`const hysteresis = [${levels.map((level) => formatNumber(level.hysteresis)).join(', ')}];`);
 
@@ -92,7 +94,7 @@ function getSkinInterface(): string[] {
   return ['interface SkinOptions {', '  skeleton: Skeleton;', '  bindMatrix: Matrix4;', '  bake: SkeletalAnimationBake;', '}'];
 }
 
-function getCreateFunction(settings: Settings, options: CodeOptions): string[] {
+function getCreateFunction(modelSettings: ModelSettings, options: CodeOptions): string[] {
   const { ts, isPixelError, isDistance, isSkinned } = options;
   const params = [ts ? 'geometry: BufferGeometry' : 'geometry', ts ? 'material: Material' : 'material', ts ? 'capacity: number' : 'capacity'];
 
@@ -110,8 +112,8 @@ function getCreateFunction(settings: Settings, options: CodeOptions): string[] {
   ];
 
   if (isPixelError) lines.push(`  const radius = lod0.boundingSphere${ts ? '!' : ''}.radius;`);
-  if (isPixelError && !settings.errorAbsolute) lines.push(`  const meshScale = getScale(lod0.getAttribute('position').array${ts ? ' as Float32Array' : ''});`);
-  if (isPixelError) lines.push(getScreenSizeScale(settings), '  let lastMetric = Infinity;');
+  if (isPixelError && !modelSettings.errorAbsolute) lines.push(`  const meshScale = getScale(lod0.getAttribute('position').array${ts ? ' as Float32Array' : ''});`);
+  if (isPixelError) lines.push(getScreenSizeScale(modelSettings), '  let lastMetric = Infinity;');
 
   lines.push('', '  for (let i = 1; i < lods.length; i++) {', ...getLoopBody(options), '  }');
 
@@ -125,8 +127,8 @@ function getCreateFunction(settings: Settings, options: CodeOptions): string[] {
 /**
  * Returns the line that converts a level error into the screen size at which it reaches `maxPixelError`.
  */
-function getScreenSizeScale(settings: Settings): string {
-  if (settings.errorAbsolute) return '  const screenSizeScale = (2 * maxPixelError * radius) / viewportHeight;';
+function getScreenSizeScale(modelSettings: ModelSettings): string {
+  if (modelSettings.errorAbsolute) return '  const screenSizeScale = (2 * maxPixelError * radius) / viewportHeight;';
 
   return '  const screenSizeScale = (2 * maxPixelError * radius) / (meshScale * viewportHeight);';
 }

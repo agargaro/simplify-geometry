@@ -1,7 +1,7 @@
 import { createChoice, createElement, createFlag, createNumberField, createSection, createToggle } from './Controls.js';
 import { levelColors } from './LODPreview.js';
 import type { Model } from './Models.js';
-import { fovRange, getLevels, instancesRange, simplifyFlags, spreadRange, type LevelSettings, type Settings, type ThresholdMode, type VerticesMode } from './Settings.js';
+import { fovRange, getLevels, getModelSettings, instancesRange, simplifyFlags, spreadRange, type LevelSettings, type Settings, type ThresholdMode, type VerticesMode } from './Settings.js';
 import { canUpdateVertices, getTriangles, getVertices } from './Simplification.js';
 import type { ViewState } from './State.js';
 import { descriptions, flagDescriptions } from './Tooltips.js';
@@ -81,7 +81,7 @@ export class Inspector {
     const body = createSection(this.container, `Level ${index}`);
     const heading = body.previousElementSibling as HTMLElement;
     const swatch = createElement('i', 'swatch');
-    const settings = this.settings;
+    const settings = getModelSettings(this.settings);
 
     swatch.style.background = levelColors[index % levelColors.length];
     heading.prepend(swatch);
@@ -155,14 +155,14 @@ export class Inspector {
 
   private renderSwitch(parent: HTMLElement): void {
     const body = createSection(parent, 'Level switching', descriptions.thresholdMode);
-    const settings = this.settings;
+    const settings = getModelSettings(this.settings);
 
     createChoice<ThresholdMode>(body, {
       tooltip: descriptions.thresholdMode,
       value: settings.thresholdMode,
       options: [
         { value: 'pixelError', label: 'Auto', tooltip: descriptions.modePixelError },
-        { value: 'screenSize', label: 'Manual · screen space', tooltip: descriptions.modeScreenSize },
+        { value: 'screenSize', label: 'Manual · screen size', tooltip: descriptions.modeScreenSize },
         { value: 'distance', label: 'Manual · distance', tooltip: descriptions.modeDistance }
       ],
       onInput: (value) => {
@@ -183,7 +183,7 @@ export class Inspector {
 
   private renderShared(): void {
     const body = createSection(this.container, 'Simplification (all levels)');
-    const settings = this.settings;
+    const settings = getModelSettings(this.settings);
 
     createChoice<VerticesMode>(body, {
       label: 'Vertices',

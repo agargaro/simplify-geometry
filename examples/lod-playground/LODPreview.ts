@@ -17,7 +17,7 @@ import {
   Vector3
 } from 'three';
 import { isShadingAvailable, type Model } from './Models.js';
-import { instanceSpacing, type Settings, type ShadingMode } from './Settings.js';
+import { getModelSettings, instanceSpacing, type Settings, type ShadingMode } from './Settings.js';
 import { getTriangles, type GeometryLOD } from './Simplification.js';
 import { randomClip } from './State.js';
 import type { FieldLayout } from './Thresholds.js';
@@ -202,8 +202,8 @@ export class LODPreview {
     const positions = field.positions;
     const count = positions.length / 2;
     const isForced = forcedLevel >= 0;
-    const mesh = this.createMesh(geometries[isForced ? forcedLevel : 0], count, settings.thresholdMode === 'distance');
-    const levels = settings.models[settings.model].levels;
+    const mesh = this.createMesh(geometries[isForced ? forcedLevel : 0], count, getModelSettings(settings).thresholdMode === 'distance');
+    const levels = getModelSettings(settings).levels;
 
     this.levelMap = [isForced ? forcedLevel : 0];
 

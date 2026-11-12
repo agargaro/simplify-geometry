@@ -1,8 +1,9 @@
 import { createChoice, createElement, selectChoice } from './Controls.js';
 import { icon, type IconName } from './Icons.js';
 import { getDrawnShading } from './LODPreview.js';
+import { modelFileAccept, readFileList, type FileSet } from './ModelFiles.js';
 import { isShadingAvailable, type Model } from './Models.js';
-import { modelLabels, modelNames, type ModelName, type PreviewLayout, type Settings, type ShadingMode } from './Settings.js';
+import type { ModelId, PreviewLayout, Settings, ShadingMode } from './Settings.js';
 import { exportSettings } from './SettingsIO.js';
 import { randomClip, type ViewState } from './State.js';
 import { descriptions } from './Tooltips.js';
@@ -10,9 +11,16 @@ import { descriptions } from './Tooltips.js';
 const repositoryUrl = 'https://github.com/agargaro/simplify-geometry';
 const packageUrl = 'https://www.npmjs.com/package/@three.ez/simplify-geometry';
 
+export interface ModelTab {
+  id: ModelId;
+  label: string;
+}
+
 export interface ToolbarCallbacks {
-  onModel: (name: ModelName) => void;
-  onOpenFile: (file: File) => void;
+  onModel: (id: ModelId) => void;
+  onRemoveModel: (id: ModelId) => void;
+  onRestoreModels: () => void;
+  onOpenFiles: (files: FileSet) => void;
   onPlay: () => void;
   onClip: (clip: number) => void;
   onImport: (text: string) => void;
@@ -35,11 +43,12 @@ export class Toolbar {
   private readonly settings: Settings;
   private readonly callbacks: ToolbarCallbacks;
   private readonly modelPicker = createElement('div', 'model-picker');
-  private readonly openButton = createToolButton('open', 'Open GLB', descriptions.openModel);
+  private readonly openButton = createToolButton('open', 'Open model', descriptions.openModel);
+  private readonly openFolderButton = createToolButton('open', 'Open folder', descriptions.openFolder);
+  private readonly restoreButton = createIconButton('reset', 'Restore sample models', descriptions.restoreModels);
   private readonly undoButton = createIconButton('undo', 'Undo', descriptions.undo);
   private readonly redoButton = createIconButton('redo', 'Redo', descriptions.redo);
-  private models: HTMLElement = createElement('div');
-  private customLabel: string | null = null;
+  private readonly models = createElement('div', 'segmented models');
 
   constructor(root: HTMLElement, settings: Settings, view: ViewState, callbacks: ToolbarCallbacks) {
     this.view = view;
@@ -52,28 +61,29 @@ export class Toolbar {
     const history = createElement('div', 'history');
     const links = createElement('div', 'links');
     const fileInput = createElement('input');
-    const modelInput = createElement('input');
+    const modelInput = createFilesInput(callbacks.onOpenFiles);
+    const folderInput = createFilesInput(callbacks.onOpenFiles);
     const importButton = createToolButton('upload', 'Import', descriptions.import);
     const exportButton = createToolButton('download', 'Export', descriptions.export);
     const resetButton = createToolButton('reset', 'Reset', descriptions.resetSettings);
 
     brand.innerHTML = `${icon('layers')}<span>@three.ez/simplify-geometry</span>`;
-    modelInput.type = 'file';
-    modelInput.accept = '.glb,model/gltf-binary';
-    modelInput.hidden = true;
-    modelInput.addEventListener('change', () => {
-      const file = modelInput.files?.[0];
-
-      modelInput.value = '';
-
-      if (file !== undefined) callbacks.onOpenFile(file);
-    });
+    modelInput.accept = modelFileAccept;
+    modelInput.multiple = true;
+    folderInput.webkitdirectory = true;
     this.openButton.addEventListener('click', () => {
       modelInput.click();
     });
-    this.modelPicker.append(this.openButton, modelInput);
+    this.openFolderButton.addEventListener('click', () => {
+      folderInput.click();
+    });
+    this.restoreButton.hidden = true;
+    this.restoreButton.addEventListener('click', callbacks.onRestoreModels);
+    this.models.setAttribute('role', 'group');
+    this.models.setAttribute('aria-label', 'Model');
+    this.models.dataset['tooltip'] = descriptions.model;
+    this.modelPicker.append(this.models, this.openButton, this.openFolderButton, this.restoreButton, modelInput, folderInput);
     root.append(this.modelPicker);
-    this.renderModels();
 
     this.play.type = 'button';
     this.play.dataset['tooltip'] = descriptions.play;
@@ -123,32 +133,41 @@ export class Toolbar {
     for (const button of this.models.querySelectorAll('button')) button.disabled = disabled;
 
     this.openButton.disabled = disabled;
+    this.restoreButton.disabled = disabled;
   }
 
   /**
-   * Shows the tab of the model loaded from a file, labeled with the file name.
+   * Shows a tab with a remove button for every model, with `active` pressed (none when null), and the restore button when `canRestore`.
    */
-  setCustomModel(label: string): void {
-    this.customLabel = label;
-    this.renderModels();
+  setModels(tabs: ModelTab[], active: ModelId | null, canRestore: boolean): void {
+    this.models.replaceChildren(...tabs.map((tab) => this.createModelTab(tab, tab.id === active)));
+    this.models.hidden = tabs.length === 0;
+    this.restoreButton.hidden = !canRestore;
   }
 
-  private renderModels(): void {
-    const names = modelNames.filter((name) => name !== 'custom' || this.customLabel !== null);
-    const picker = createElement('div');
-    const choice = createChoice<ModelName>(picker, {
-      tooltip: descriptions.model,
-      value: this.settings.model,
-      options: names.map((name) => ({ value: name, label: name === 'custom' ? this.customLabel! : modelLabels[name] })),
-      onInput: this.callbacks.onModel
+  private createModelTab(tab: ModelTab, isActive: boolean): HTMLElement {
+    const item = createElement('span', 'model-tab');
+    const select = createElement('button', 'segment');
+    const remove = createElement('button', 'model-remove');
+
+    select.type = 'button';
+    select.textContent = tab.label;
+    select.setAttribute('aria-pressed', String(isActive));
+    select.addEventListener('click', () => {
+      for (const other of this.models.querySelectorAll('.segment')) other.setAttribute('aria-pressed', String(other === select));
+
+      this.callbacks.onModel(tab.id);
     });
+    remove.type = 'button';
+    remove.innerHTML = icon('close');
+    remove.dataset['tooltip'] = descriptions.removeModel;
+    remove.setAttribute('aria-label', `Remove ${tab.label}`);
+    remove.addEventListener('click', () => {
+      this.callbacks.onRemoveModel(tab.id);
+    });
+    item.append(select, remove);
 
-    choice.classList.add('models');
-    choice.setAttribute('aria-label', 'Model');
-    this.models.replaceWith(choice);
-    this.models = choice;
-
-    if (choice.parentElement !== this.modelPicker) this.modelPicker.prepend(choice);
+    return item;
   }
 
   setHistory(canUndo: boolean, canRedo: boolean): void {
@@ -320,6 +339,25 @@ function createLink(name: IconName, label: string, href: string, tooltip: string
   link.dataset['tooltip'] = tooltip;
 
   return link;
+}
+
+/**
+ * Returns a hidden file input that passes the chosen files to `onFiles` and is emptied, so that choosing the same files again works.
+ */
+function createFilesInput(onFiles: (files: FileSet) => void): HTMLInputElement {
+  const input = createElement('input');
+
+  input.type = 'file';
+  input.hidden = true;
+  input.addEventListener('change', () => {
+    const files = input.files;
+
+    if (files !== null && files.length > 0) onFiles(readFileList(files));
+
+    input.value = '';
+  });
+
+  return input;
 }
 
 function createIconButton(name: IconName, label: string, tooltip: string): HTMLButtonElement {

@@ -1,4 +1,4 @@
-import type { LevelSettings, Settings } from './Settings.js';
+import type { LevelSettings, ModelSettings, Settings } from './Settings.js';
 import type { GeometryLOD } from './Simplification.js';
 
 const maxTopRowAngle = 0.1;
@@ -17,15 +17,15 @@ const maxFieldAttempts = 60000;
  * With a pixel error budget the screen size is derived from the error of the level:
  * `errorPixels = error * meshScale * screenSize * viewportHeight / (2 * radius)`.
  */
-export function getThresholds(lod: GeometryLOD, levels: LevelSettings[], settings: Settings, viewportHeight: number): number[] {
+export function getThresholds(lod: GeometryLOD, levels: LevelSettings[], modelSettings: ModelSettings, viewportHeight: number): number[] {
   const thresholds: number[] = [];
 
   for (let i = 1; i < lod.levels.length; i++) {
     const level = levels[i - 1];
 
-    if (settings.thresholdMode === 'screenSize') thresholds.push(level.screenSize);
-    else if (settings.thresholdMode === 'distance') thresholds.push(level.distance);
-    else thresholds.push((2 * settings.pixelError * lod.radius) / (lod.levels[i].error * lod.meshScale * viewportHeight));
+    if (modelSettings.thresholdMode === 'screenSize') thresholds.push(level.screenSize);
+    else if (modelSettings.thresholdMode === 'distance') thresholds.push(level.distance);
+    else thresholds.push((2 * modelSettings.pixelError * lod.radius) / (lod.levels[i].error * lod.meshScale * viewportHeight));
   }
 
   return thresholds;
@@ -35,8 +35,8 @@ export function getThresholds(lod: GeometryLOD, levels: LevelSettings[], setting
  * Returns which levels after the first one reach the mesh: a level is skipped when its metric is not finite and positive or does not
  * follow the previous level (smaller screen size, larger distance), because it would never be used.
  */
-export function getUsedLevels(thresholds: number[], settings: Settings): boolean[] {
-  const isDistance = settings.thresholdMode === 'distance';
+export function getUsedLevels(thresholds: number[], modelSettings: ModelSettings): boolean[] {
+  const isDistance = modelSettings.thresholdMode === 'distance';
   const used: boolean[] = [];
   let last = isDistance ? 0 : Infinity;
 
@@ -54,8 +54,8 @@ export function getUsedLevels(thresholds: number[], settings: Settings): boolean
 /**
  * Returns the camera distance at which an instance switches to a level, for a perspective camera.
  */
-export function getSwitchDistance(threshold: number, radius: number, settings: Settings, fov: number): number {
-  if (settings.thresholdMode === 'distance') return threshold;
+export function getSwitchDistance(threshold: number, radius: number, modelSettings: Pick<ModelSettings, 'thresholdMode'>, fov: number): number {
+  if (modelSettings.thresholdMode === 'distance') return threshold;
 
   return radius / (threshold * getTanHalfFov(fov));
 }
@@ -63,8 +63,8 @@ export function getSwitchDistance(threshold: number, radius: number, settings: S
 /**
  * Returns the screen size (projected diameter / viewport height) at which an instance switches to a level.
  */
-export function getSwitchScreenSize(threshold: number, radius: number, settings: Settings, fov: number): number {
-  if (settings.thresholdMode !== 'distance') return threshold;
+export function getSwitchScreenSize(threshold: number, radius: number, modelSettings: Pick<ModelSettings, 'thresholdMode'>, fov: number): number {
+  if (modelSettings.thresholdMode !== 'distance') return threshold;
 
   return radius / (threshold * getTanHalfFov(fov));
 }

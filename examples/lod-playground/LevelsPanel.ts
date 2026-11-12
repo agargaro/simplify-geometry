@@ -2,7 +2,7 @@ import { createElement } from './Controls.js';
 import { formatCount, formatDecimal, formatDistance, formatPercent } from './Format.js';
 import { icon } from './Icons.js';
 import { levelColors, type PreviewStats } from './LODPreview.js';
-import { getLevels, maxLevels, type Settings } from './Settings.js';
+import { getLevels, getModelSettings, maxLevels, type Settings } from './Settings.js';
 import { getTriangles } from './Simplification.js';
 import type { Snapshot, ViewState } from './State.js';
 import { getSwitchDistance, getSwitchScreenSize } from './Thresholds.js';
@@ -59,8 +59,8 @@ export class LevelsPanel {
     actions.append(this.removeButton, this.addButton);
     header.append(title, this.count, actions);
 
-    heads.innerHTML = `<span>Level</span><span data-tooltip="${descriptions.levelTriangles}">Triangles</span><span>Share</span>`
-      + '<span data-tooltip="Instances drawn with the level in the current frame.">Inst.</span>';
+    heads.innerHTML = `<span>Level</span><span data-tooltip="${descriptions.levelTriangles}">Triangles</span><span data-tooltip="${descriptions.levelShare}">Share</span>`
+      + `<span data-tooltip="${descriptions.levelInstances}">Inst.</span>`;
 
     this.list.setAttribute('aria-label', 'Levels');
     this.list.addEventListener('keydown', (event) => {
@@ -71,7 +71,7 @@ export class LevelsPanel {
     });
 
     drawnLabel.textContent = 'Drawn';
-    drawnLabel.dataset['tooltip'] = 'Triangles drawn in the current frame, against drawing every visible instance with level 0.';
+    drawnLabel.dataset['tooltip'] = descriptions.drawn;
     drawnTrack.append(this.drawnBar);
     drawnRow.append(drawnLabel, this.drawn, drawnTrack);
     credits.innerHTML = 'Simplified with <a href="https://github.com/zeux/meshoptimizer" target="_blank" rel="noopener">meshoptimizer</a>'
@@ -190,14 +190,14 @@ export class LevelsPanel {
   }
 
   private formatError(error: number): string {
-    return this.settings.errorAbsolute ? `${formatDecimal(error)} units` : `${formatPercent(error)} of size`;
+    return getModelSettings(this.settings).errorAbsolute ? `${formatDecimal(error)} units` : `${formatPercent(error)} of size`;
   }
 
   private formatSwitch(threshold: number, radius: number, fov: number): string {
-    const distance = formatDistance(getSwitchDistance(threshold, radius, this.settings, fov));
-    const screenSize = formatPercent(getSwitchScreenSize(threshold, radius, this.settings, fov));
+    const distance = formatDistance(getSwitchDistance(threshold, radius, getModelSettings(this.settings), fov));
+    const screenSize = formatPercent(getSwitchScreenSize(threshold, radius, getModelSettings(this.settings), fov));
 
-    return `camera ≥ ${distance} units · screen space ≤ ${screenSize}`;
+    return `camera ≥ ${distance} units · screen size ≤ ${screenSize}`;
   }
 }
 

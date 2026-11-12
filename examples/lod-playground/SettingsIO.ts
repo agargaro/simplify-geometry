@@ -1,24 +1,61 @@
-import { createDefaultSettings, createModelSettings, fovRange, instancesRange, maxLevels, modelNames, spreadRange, type LevelSettings, type ModelSettings, type Settings } from './Settings.js';
+import { builtInModelNames, createDefaultSettings, createModelSettings, fovRange, instancesRange, isBuiltInModel, maxLevels, spreadRange, type BuiltInModelName, type LevelSettings, type ModelSettings, type Settings } from './Settings.js';
 
 type Values = Record<string, unknown>;
 
-const fileVersion = 2;
+const fileVersion = 3;
+/** Version 2 kept the simplification and switching settings outside the models: every model gets them. */
+const readableVersions = [2, 3];
 const storageKey = 'lod-playground-settings';
+const removedModelsKey = 'lod-playground-removed-models';
+const fileModelId = /^file-\d+$/;
+
+const modelEnumValues: Partial<Record<keyof ModelSettings, readonly string[]>> = {
+  vertices: ['reordered', 'shared', 'compact'],
+  thresholdMode: ['pixelError', 'screenSize', 'distance']
+};
 
 const enumValues: Partial<Record<keyof Settings, readonly string[]>> = {
-  model: modelNames,
-  vertices: ['reordered', 'shared', 'compact'],
-  thresholdMode: ['pixelError', 'screenSize', 'distance'],
   language: ['ts', 'js'],
   layout: ['distance', 'levels'],
   shading: ['clay', 'uv', 'material', 'texture', 'wireframe']
 };
 
 /**
- * Reads the settings saved in this browser, or the defaults.
+ * Reads the settings saved in this browser, or the defaults. Models opened from files do not survive a reload: their settings are dropped
+ * and, when one was shown, the first built-in model is shown instead.
  */
 export function readInitialSettings(): Settings {
-  return parseSettings(() => localStorage.getItem(storageKey)) ?? createDefaultSettings();
+  const settings = parseSettings(() => localStorage.getItem(storageKey)) ?? createDefaultSettings();
+  const models = settings.models;
+
+  settings.models = {};
+
+  for (const name of builtInModelNames) settings.models[name] = models[name];
+
+  if (!isBuiltInModel(settings.model)) settings.model = builtInModelNames[0];
+
+  return settings;
+}
+
+/**
+ * Reads the built-in models removed in this browser.
+ */
+export function readRemovedModels(): BuiltInModelName[] {
+  try {
+    const values: unknown = JSON.parse(localStorage.getItem(removedModelsKey) ?? '[]');
+
+    return Array.isArray(values) ? builtInModelNames.filter((name) => values.includes(name)) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveRemovedModels(names: BuiltInModelName[]): void {
+  try {
+    localStorage.setItem(removedModelsKey, JSON.stringify(names));
+  } catch {
+    return;
+  }
 }
 
 /**
@@ -37,7 +74,8 @@ export function exportSettings(settings: Settings): string {
 }
 
 /**
- * Reads a file written by `exportSettings`. Values with a wrong type or outside the allowed options fall back to the defaults.
+ * Reads a file written by `exportSettings`, also by the previous version. Values with a wrong type or outside the allowed options fall back
+ * to the defaults.
  */
 export function importSettings(text: string): Settings {
   let values: unknown;
@@ -49,7 +87,7 @@ export function importSettings(text: string): Settings {
   }
 
   if (!isValues(values) || !isValues(values['settings'])) throw new Error('The file is not a LOD playground configuration.');
-  if (values['version'] !== fileVersion) throw new Error(`The file was saved by another version of the LOD playground (version ${String(values['version'])}, expected ${fileVersion}).`);
+  if (!readableVersions.includes(values['version'] as number)) throw new Error(`The file was saved by another version of the LOD playground (version ${String(values['version'])}, expected ${fileVersion}).`);
 
   return createSettings(values['settings']);
 }
@@ -70,23 +108,17 @@ function parseSettings(read: () => string | null): Settings | null {
 
 function createSettings(values: Values): Settings {
   const settings = createDefaultSettings();
-  const target = settings as unknown as Values;
+  const models = isValues(values['models']) ? values['models'] : {};
 
-  for (const key of Object.keys(settings) as (keyof Settings)[]) {
-    if (key === 'models') continue;
+  mergeValues(settings as unknown as Values, values, enumValues, 'models');
 
-    const value = values[key];
-    const allowed = enumValues[key];
-    const isAllowed = allowed === undefined || allowed.includes(value as string);
+  for (const name of builtInModelNames) settings.models[name] = readModel(models[name], values);
 
-    if (isSameType(value, target[key]) && isAllowed) target[key] = value;
+  for (const id of Object.keys(models)) {
+    if (fileModelId.test(id)) settings.models[id] = readModel(models[id], values);
   }
 
-  const models = values['models'];
-
-  if (isValues(models)) {
-    for (const name of modelNames) settings.models[name] = readModel(models[name]);
-  }
+  if (!Object.hasOwn(settings.models, settings.model)) settings.model = builtInModelNames[0];
 
   settings.instances = clamp(Math.round(settings.instances), instancesRange);
   settings.spread = clamp(settings.spread, spreadRange);
@@ -95,16 +127,42 @@ function createSettings(values: Values): Settings {
   return settings;
 }
 
-function readModel(value: unknown): ModelSettings {
+/**
+ * Reads the settings of one model. `legacy` holds the values that version 2 kept outside the models, used when the model has none. Levels
+ * read from the file are kept as they are; without them, the levels are computed from the geometry when the model is shown.
+ */
+function readModel(value: unknown, legacy: Values): ModelSettings {
   const model = createModelSettings();
+
+  mergeValues(model as unknown as Values, legacy, modelEnumValues, 'levels');
 
   if (!isValues(value)) return model;
 
+  mergeValues(model as unknown as Values, value, modelEnumValues, 'levels');
+
   const levels = value['levels'];
 
-  if (Array.isArray(levels) && levels.length > 0) model.levels = readLevels(levels, model.levels);
+  const hasLevels = Array.isArray(levels) && levels.length > 0;
+
+  model.levelsPending = !hasLevels || value['levelsPending'] === true;
+
+  if (hasLevels) model.levels = readLevels(levels, model.levels);
 
   return model;
+}
+
+/**
+ * Copies into `target` the values of its keys, except `model` and `skipped`, that have the same type and, for enumerations, an allowed
+ * option.
+ */
+function mergeValues(target: Values, values: Values, enums: Partial<Record<string, readonly string[]>>, skipped: string): void {
+  for (const key of Object.keys(target)) {
+    const value = values[key];
+    const allowed = enums[key];
+    const isAllowed = allowed === undefined || allowed.includes(value as string);
+
+    if (key !== skipped && key !== 'model' && isSameType(value, target[key]) && isAllowed) target[key] = value;
+  }
 }
 
 function readLevels(values: unknown[], defaults: LevelSettings[]): LevelSettings[] {

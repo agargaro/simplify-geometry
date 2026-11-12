@@ -1,6 +1,6 @@
-import { getScale, simplifyGeometryLOD, type SimplifyGeometryLevelParams, type SimplifyGeometryLODParams, type SimplifyGeometryResult } from '@three.ez/simplify-geometry';
+import { getScale, simplifyGeometry as simplifyGeometryLevel, simplifyGeometryLOD, type SimplifyGeometryLevelParams, type SimplifyGeometryLODParams, type SimplifyGeometryResult } from '@three.ez/simplify-geometry';
 import type { BufferGeometry } from 'three';
-import { simplifyFlags, type LevelSettings, type Settings, type SimplifyFlag } from './Settings.js';
+import { simplifyFlags, type LevelSettings, type ModelSettings, type SimplifyFlag } from './Settings.js';
 
 export interface GeometryLOD {
   levels: SimplifyGeometryResult[];
@@ -15,8 +15,8 @@ export interface GeometryLOD {
 /**
  * Returns the parameters shared by every level. Flags enabled on every level are set here once.
  */
-export function getSimplifyParams(settings: Settings, levels: LevelSettings[]): SimplifyGeometryLODParams {
-  const params = getBaseParams(settings);
+export function getSimplifyParams(modelSettings: ModelSettings, levels: LevelSettings[]): SimplifyGeometryLODParams {
+  const params = getBaseParams(modelSettings);
 
   for (const flag of getSharedFlags(levels)) params[flag] = true;
 
@@ -26,7 +26,7 @@ export function getSimplifyParams(settings: Settings, levels: LevelSettings[]): 
 /**
  * Returns the parameters of each level, without the flags listed in `sharedFlags`.
  */
-export function getLevelParams(levels: LevelSettings[], sharedFlags: SimplifyFlag[], settings: Settings): SimplifyGeometryLevelParams[] {
+export function getLevelParams(levels: LevelSettings[], sharedFlags: SimplifyFlag[], modelSettings: ModelSettings): SimplifyGeometryLevelParams[] {
   const params: SimplifyGeometryLevelParams[] = [];
 
   for (const level of levels) {
@@ -35,7 +35,7 @@ export function getLevelParams(levels: LevelSettings[], sharedFlags: SimplifyFla
     if (level.ratio > 0) levelParams.ratio = level.ratio;
     levelParams.error = level.error;
     if (level.sloppy) levelParams.sloppy = true;
-    if (level.updateVertices && canUpdateVertices(level, settings)) levelParams.updateVertices = true;
+    if (level.updateVertices && canUpdateVertices(level, modelSettings)) levelParams.updateVertices = true;
 
     for (const flag of simplifyFlags) {
       if (level[flag] && !sharedFlags.includes(flag)) levelParams[flag] = true;
@@ -51,13 +51,13 @@ export function getSharedFlags(levels: LevelSettings[]): SimplifyFlag[] {
   return simplifyFlags.filter((flag) => levels.every((level) => level[flag]));
 }
 
-export function canUpdateVertices(level: LevelSettings, settings: Settings): boolean {
-  return settings.vertices === 'compact' && !level.sloppy;
+export function canUpdateVertices(level: LevelSettings, modelSettings: ModelSettings): boolean {
+  return modelSettings.vertices === 'compact' && !level.sloppy;
 }
 
-export function simplifyGeometry(source: BufferGeometry, levels: LevelSettings[], settings: Settings): GeometryLOD {
+export function simplifyGeometry(source: BufferGeometry, levels: LevelSettings[], modelSettings: ModelSettings): GeometryLOD {
   const start = performance.now();
-  const results = simplifyGeometryLOD(source, getLevelParams(levels, [], settings), getBaseParams(settings));
+  const results = simplifyGeometryLOD(source, getLevelParams(levels, [], modelSettings), getBaseParams(modelSettings));
   const time = performance.now() - start;
   const geometry = results[0].geometry;
   const extent = getScale(geometry.getAttribute('position').array as Float32Array);
@@ -70,9 +70,20 @@ export function simplifyGeometry(source: BufferGeometry, levels: LevelSettings[]
     levels: results,
     radius: geometry.boundingSphere?.radius ?? 0,
     extent,
-    meshScale: settings.errorAbsolute ? 1 : extent,
+    meshScale: modelSettings.errorAbsolute ? 1 : extent,
     time
   };
+}
+
+/**
+ * Simplifies `level` alone with the simplification settings of the model. The result shares the vertices of `source` and is never drawn:
+ * it is enough to read its triangles and error.
+ */
+export function simplifyLevel(source: BufferGeometry, level: LevelSettings, modelSettings: ModelSettings): SimplifyGeometryResult {
+  const sharedSettings: ModelSettings = { ...modelSettings, vertices: 'shared' };
+  const levelParams = getLevelParams([level], [], sharedSettings)[0];
+
+  return simplifyGeometryLevel(source, { ...getBaseParams(sharedSettings), ...levelParams, vertices: 'shared' });
 }
 
 export function disposeLOD(lod: GeometryLOD, source: BufferGeometry): void {
@@ -89,21 +100,21 @@ export function getVertices(geometry: BufferGeometry): number {
   return geometry.getAttribute('position').count;
 }
 
-function getBaseParams(settings: Settings): SimplifyGeometryLODParams {
-  const params: SimplifyGeometryLODParams = { vertices: settings.vertices };
-  const protectSeams = getProtectSeams(settings);
+function getBaseParams(modelSettings: ModelSettings): SimplifyGeometryLODParams {
+  const params: SimplifyGeometryLODParams = { vertices: modelSettings.vertices };
+  const protectSeams = getProtectSeams(modelSettings);
 
-  if (settings.errorAbsolute) params.errorAbsolute = true;
+  if (modelSettings.errorAbsolute) params.errorAbsolute = true;
   if (protectSeams.length > 0) params.protectSeams = protectSeams;
 
   return params;
 }
 
-function getProtectSeams(settings: Settings): string[] {
+function getProtectSeams(modelSettings: ModelSettings): string[] {
   const names: string[] = [];
 
-  if (settings.protectNormalSeams) names.push('normal');
-  if (settings.protectUvSeams) names.push('uv');
+  if (modelSettings.protectNormalSeams) names.push('normal');
+  if (modelSettings.protectUvSeams) names.push('uv');
 
   return names;
 }

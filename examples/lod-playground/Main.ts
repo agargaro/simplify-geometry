@@ -1,22 +1,25 @@
 import { prepareInstancedRenderer } from '@three.ez/instanced-mesh';
 import { simplifyReady } from '@three.ez/simplify-geometry';
-import { AmbientLight, type BufferGeometry, Color, DirectionalLight, PerspectiveCamera, PMREMGenerator, Scene, WebGLRenderer } from 'three';
+import { AmbientLight, type BufferGeometry, Color, DirectionalLight, PerspectiveCamera, PMREMGenerator, Scene, Vector3, WebGLRenderer } from 'three';
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { BottomDock } from './BottomDock.js';
+import { computeDefaultLevels, computeNextLevel } from './DefaultLevels.js';
 import { formatTime } from './Format.js';
 import { History } from './History.js';
 import { Inspector } from './Inspector.js';
 import { LevelNav } from './LevelNav.js';
 import { LevelsPanel } from './LevelsPanel.js';
 import { LODPreview } from './LODPreview.js';
+import { modelFileList, readDataTransfer, type FileSet } from './ModelFiles.js';
+import { pickModels } from './ModelPicker.js';
 import { disposeModel, initModelLoaders, loadModel, loadModelFile, type Model } from './Models.js';
-import { createDefaultSettings, createModelSettings, createNextLevel, getLevels, maxLevels, modelLabels, type LevelSettings, type ModelName, type Settings, type ThresholdMode } from './Settings.js';
-import { importSettings, readInitialSettings, saveSettings } from './SettingsIO.js';
-import { disposeLOD, simplifyGeometry, type GeometryLOD } from './Simplification.js';
+import { builtInModelNames, createDefaultSettings, createModelSettings, getLevels, getModelSettings, isBuiltInModel, maxLevels, modelLabels, type ModelId, type ModelSettings, type Settings, type ThresholdMode } from './Settings.js';
+import { importSettings, readInitialSettings, readRemovedModels, saveRemovedModels, saveSettings } from './SettingsIO.js';
+import { disposeLOD, getTriangles, simplifyGeometry, type GeometryLOD } from './Simplification.js';
 import { randomClip, type Snapshot, type ViewState } from './State.js';
 import { getFieldLayout, getSwitchDistance, getSwitchScreenSize, getThresholds, getUsedLevels } from './Thresholds.js';
-import { Toolbar, ViewportBar } from './Toolbar.js';
+import { Toolbar, ViewportBar, type ModelTab } from './Toolbar.js';
 import { initTooltips } from './Tooltips.js';
 import { getResultWarnings, getSettingsWarnings } from './Warnings.js';
 
@@ -30,10 +33,12 @@ const updateDelay = 60;
 const resizeDelay = 200;
 const maxDelta = 0.1;
 
+const app = getElement('app');
 const errorBanner = getElement('error');
 const errorMessage = getElement('error-message');
 const viewport = getElement('viewport');
 const status = getElement('viewport-status');
+const emptyNote = getElement('viewport-empty');
 
 getElement('error-close').addEventListener('click', hideError);
 window.addEventListener('error', (event) => {
@@ -46,18 +51,20 @@ window.addEventListener('unhandledrejection', (event) => {
 initTooltips(getElement('tooltip'));
 
 const settings = readInitialSettings();
-
-if (settings.model === 'custom') settings.model = 'imp';
-
+const removedModels: ModelId[] = readRemovedModels();
 const history = new History(settings);
 const view: ViewState = { selectedLevel: 1, hoveredLevel: -1, isolate: false, forcedLevel: -1, playing: true, clip: randomClip };
-const models = new Map<ModelName, Model>();
+const models = new Map<ModelId, Model>();
+/** Models opened from files, in the order of their tabs. */
+const fileModels: ModelId[] = [];
 
 const renderer = new WebGLRenderer({ antialias: true });
 const scene = new Scene();
 const camera = new PerspectiveCamera(settings.fov, 1, 0.1, 5000);
 const controls = new MapControls(camera, renderer.domElement);
 const light = new DirectionalLight('white', 2.2);
+const wheelForward = new Vector3();
+let wheelStep = 0.01;
 const preview = new LODPreview(scene);
 
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -74,9 +81,11 @@ controls.zoomToCursor = true;
 controls.zoomSpeed = 0.5;
 controls.panSpeed = 0.5;
 controls.rotateSpeed = 0.6;
+controls.enableZoom = false;
 controls.addEventListener('change', requestRender);
+renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
 
-const toolbar = new Toolbar(getElement('toolbar'), settings, view, { onModel: (name) => void selectModel(name), onOpenFile: (file) => void openModelFile(file), onPlay: togglePlay, onClip: selectClip, onImport, onUndo: undo, onRedo: redo, onReset });
+const toolbar = new Toolbar(getElement('toolbar'), settings, view, { onModel: (id) => void selectModel(id), onRemoveModel: (id) => void removeModel(id), onRestoreModels: restoreModels, onOpenFiles: (files) => void openModelFiles(files), onPlay: togglePlay, onClip: selectClip, onImport, onUndo: undo, onRedo: redo, onReset });
 const viewportBar = new ViewportBar(getElement('viewport-bar'), settings, view, { onChange: scheduleUpdate, onHighlight: updateHighlight, onResetCamera: resetCamera });
 const levelsPanel = new LevelsPanel(getElement('levels-dock'), settings, view, { onSelect: selectLevel, onHover: hoverLevel, onAdd: addLevel, onRemove: removeLevel, onMeasure: () => void measureBuildTime() });
 const dock = new BottomDock(getElement('bottom-dock'), settings, view, { onSelect: selectLevel, onHover: hoverLevel, onLanguage });
@@ -90,7 +99,7 @@ preview.onStats = (stats) => {
 let lodCache: LODCache | null = null;
 let snapshot: Snapshot | null = null;
 let buildKey = '';
-let snapshotMode: ThresholdMode = settings.thresholdMode;
+let snapshotMode: ThresholdMode = getModelSettings(settings).thresholdMode;
 let builtGeometries: BufferGeometry[] = [];
 let cameraKey = '';
 let updateTimeout = 0;
@@ -102,64 +111,202 @@ new ResizeObserver(resize).observe(viewport);
 resize();
 
 initFileDrop();
+renderModelTabs();
 document.addEventListener('keydown', onHistoryKey);
 
 await Promise.all([simplifyReady(), prepareInstancedRenderer(renderer)]);
-await selectModel(settings.model);
+
+if (removedModels.includes(settings.model)) await selectFirstModel();
+else await selectModel(settings.model);
+
 renderer.setAnimationLoop(frame);
 
-async function selectModel(name: ModelName): Promise<void> {
-  const cached = models.get(name);
+async function selectModel(id: ModelId): Promise<void> {
+  const cached = models.get(id);
 
   if (cached !== undefined) {
-    settings.model = name;
+    settings.model = id;
     showModel(cached);
 
     return;
   }
 
-  if (name === 'custom') return;
+  if (!isBuiltInModel(id)) return;
 
-  const model = await loadWithStatus(`Loading ${modelLabels[name]}…`, async () => loadModel(name));
+  const model = await loadWithStatus(`Loading ${modelLabels[id]}…`, async () => loadModel(id));
 
-  if (model === null) return;
+  if (model === null) {
+    renderModelTabs();
 
-  models.set(name, model);
-  settings.model = name;
+    return;
+  }
+
+  models.set(id, model);
+  settings.model = id;
   showModel(model);
 }
 
-async function openModelFile(file: File): Promise<void> {
-  const model = await loadWithStatus(`Loading ${file.name}…`, async () => loadModelFile(file));
+async function selectFirstModel(): Promise<void> {
+  const first = getModelTabs().at(0);
 
-  if (model === null) return;
-
-  const previous = models.get('custom');
-
-  models.set('custom', model);
-  settings.model = 'custom';
-  settings.models.custom = createModelSettings();
-  history.clear('custom');
-  toolbar.setCustomModel(model.label);
-  showModel(model);
-
-  if (previous !== undefined && lodCache?.model !== previous) disposeModel(previous);
+  if (first === undefined) showEmpty();
+  else await selectModel(first.id);
 }
 
-async function loadWithStatus(text: string, load: () => Promise<Model>): Promise<Model | null> {
+/**
+ * Opens the models of `files` in their own tabs, one after the other, and shows the first one that loads. When a folder holds several
+ * models, a dialog asks which ones to open. The files that fail are listed in one error.
+ */
+async function openModelFiles(files: FileSet): Promise<void> {
+  if (files.models.length === 0) {
+    showError(new Error(`No model among the opened files: use ${modelFileList}.`));
+
+    return;
+  }
+
+  const chosen = files.fromFolder && files.models.length > 1 ? await pickModels(files.models) : files.models;
+  const count = chosen.length;
+  const failures: string[] = [];
+  let first: Model | null = null;
+
+  for (let i = 0; i < count; i++) {
+    const source = chosen[i];
+    const progress = count > 1 ? ` (${i + 1}/${count})` : '';
+    const onError = (error: unknown): void => {
+      failures.push(`${source.path}: ${getErrorMessage(error)}`);
+    };
+    const model = await loadWithStatus(`Loading ${source.file.name}${progress}…`, async () => loadModelFile(source, files), onError);
+
+    if (model === null) continue;
+
+    addFileModel(model);
+    first ??= model;
+  }
+
+  if (first !== null) {
+    settings.model = first.name;
+    showModel(first);
+  }
+
+  if (failures.length === 0) return;
+
+  showError(new Error(failures.length === 1 ? failures[0] : `${failures.length} files could not be opened. ${failures.join(' ')}`));
+}
+
+function addFileModel(model: Model): void {
+  models.set(model.name, model);
+  fileModels.push(model.name);
+  settings.models[model.name] = createModelSettings();
+  history.clear(model.name);
+}
+
+/**
+ * Removes a model with its levels and history. A removed built-in model stays removed in this browser until `restoreModels`.
+ */
+async function removeModel(id: ModelId): Promise<void> {
+  const model = models.get(id);
+  const isShown = id === settings.model;
+
+  models.delete(id);
+
+  if (isBuiltInModel(id)) {
+    removedModels.push(id);
+    saveRemovedModels(removedModels.filter(isBuiltInModel));
+    settings.models[id] = createModelSettings();
+  } else {
+    fileModels.splice(fileModels.indexOf(id), 1);
+    settings.models = withoutModel(settings.models, id);
+  }
+
+  history.clear(id);
+
+  if (isShown) clearPreview();
+  if (model !== undefined) disposeModel(model);
+
+  if (isShown) await selectFirstModel();
+  else renderModelTabs();
+
+  saveSettings(settings);
+}
+
+function restoreModels(): void {
+  const isEmpty = app.classList.contains('is-empty');
+
+  removedModels.length = 0;
+  saveRemovedModels([]);
+  renderModelTabs();
+
+  if (isEmpty) void selectFirstModel();
+}
+
+function withoutModel(source: Record<ModelId, ModelSettings>, id: ModelId): Record<ModelId, ModelSettings> {
+  return Object.fromEntries(Object.entries(source).filter(([key]) => key !== id));
+}
+
+function getModelTabs(): ModelTab[] {
+  const tabs: ModelTab[] = [];
+
+  for (const name of builtInModelNames) {
+    if (!removedModels.includes(name)) tabs.push({ id: name, label: modelLabels[name] });
+  }
+
+  for (const id of fileModels) tabs.push({ id, label: models.get(id)!.label });
+
+  return tabs;
+}
+
+function renderModelTabs(): void {
+  const active = app.classList.contains('is-empty') ? null : settings.model;
+
+  toolbar.setModels(getModelTabs(), active, removedModels.length > 0);
+}
+
+/**
+ * Shows that no model is left: the panels are hidden until a model is opened or the sample models are restored.
+ */
+function showEmpty(): void {
+  settings.model = builtInModelNames[0];
+  setEmpty(true);
+  renderModelTabs();
+}
+
+function setEmpty(isEmpty: boolean): void {
+  app.classList.toggle('is-empty', isEmpty);
+  emptyNote.hidden = !isEmpty;
+}
+
+/**
+ * Removes the instances of the shown model and frees its levels, before the model itself is disposed.
+ */
+function clearPreview(): void {
+  preview.dispose();
+
+  if (lodCache !== null) disposeLOD(lodCache.lod, lodCache.model.geometry);
+
+  lodCache = null;
+  snapshot = null;
+  buildKey = '';
+  cameraKey = '';
+  builtGeometries = [];
+  requestRender();
+}
+
+async function loadWithStatus(text: string, load: () => Promise<Model>, onError: (error: unknown) => void = showError): Promise<Model | null> {
   toolbar.setModelsDisabled(true);
   status.textContent = text;
   status.hidden = false;
+  emptyNote.hidden = true;
 
   try {
     return await load();
   } catch (error) {
-    showError(error);
+    onError(error);
 
     return null;
   } finally {
     toolbar.setModelsDisabled(false);
     status.hidden = true;
+    emptyNote.hidden = !app.classList.contains('is-empty');
   }
 }
 
@@ -186,17 +333,9 @@ function initFileDrop(): void {
     depth = 0;
     stage.classList.remove('is-dropping');
 
-    const file = event.dataTransfer?.files[0];
+    if (event.dataTransfer === null) return;
 
-    if (file === undefined) return;
-
-    if (!/\.glb$/i.test(file.name)) {
-      showError(new Error(`"${file.name}" is not a .glb file.`));
-
-      return;
-    }
-
-    void openModelFile(file);
+    readDataTransfer(event.dataTransfer).then(openModelFiles, showError);
   });
 }
 
@@ -205,6 +344,9 @@ function hasFiles(event: DragEvent): boolean {
 }
 
 function showModel(model: Model): void {
+  applyPendingLevels(model);
+  setEmpty(false);
+  renderModelTabs();
   view.clip = randomClip;
   view.forcedLevel = -1;
   toolbar.setModel(model);
@@ -212,6 +354,24 @@ function showModel(model: Model): void {
   preview.setClip(randomClip);
   inspector.render(model);
   update();
+}
+
+/**
+ * Replaces the placeholder levels of the shown model with the levels computed from its geometry. The computed levels are the starting
+ * point of the model history, so undo never goes back to the placeholders.
+ */
+function applyPendingLevels(model: Model): void {
+  const modelSettings = getModelSettings(settings);
+
+  if (!modelSettings.levelsPending) return;
+
+  setDefaultLevels(modelSettings, model);
+  history.clear(settings.model);
+}
+
+function setDefaultLevels(modelSettings: ModelSettings, model: Model): void {
+  modelSettings.levels = computeDefaultLevels(model.geometry, modelSettings);
+  modelSettings.levelsPending = false;
 }
 
 function frame(time: number): void {
@@ -227,6 +387,7 @@ function frame(time: number): void {
   if (!needsRender) return;
 
   needsRender = false;
+  camera.updateMatrixWorld();
   preview.cull(camera);
   renderer.render(scene, camera);
 }
@@ -295,11 +456,12 @@ function update(): void {
 }
 
 function createSnapshot(model: Model): Snapshot {
-  const levels = getLevels(settings);
-  const lod = getLOD(model, levels);
-  const thresholds = getThresholds(lod, levels, settings, viewportHeight);
-  const used = getUsedLevels(thresholds, settings);
-  const warnings = [...getSettingsWarnings(settings, model), ...getResultWarnings(lod, used, settings)];
+  const modelSettings = getModelSettings(settings);
+  const levels = modelSettings.levels;
+  const lod = getLOD(model, modelSettings);
+  const thresholds = getThresholds(lod, levels, modelSettings, viewportHeight);
+  const used = getUsedLevels(thresholds, modelSettings);
+  const warnings = [...getSettingsWarnings(modelSettings, model), ...getResultWarnings(lod, used, modelSettings)];
 
   return { model, lod, thresholds, used, field: getFieldLayout(lod, settings, camera.fov), fov: camera.fov, warnings };
 }
@@ -307,15 +469,16 @@ function createSnapshot(model: Model): Snapshot {
 /**
  * Returns the levels of the model, simplifying it again only when the simplification parameters change.
  */
-function getLOD(model: Model, levels: LevelSettings[]): GeometryLOD {
+function getLOD(model: Model, modelSettings: ModelSettings): GeometryLOD {
+  const levels = modelSettings.levels;
   const key = JSON.stringify([
-    model.id, settings.vertices, settings.errorAbsolute, settings.protectNormalSeams, settings.protectUvSeams,
+    model.id, modelSettings.vertices, modelSettings.errorAbsolute, modelSettings.protectNormalSeams, modelSettings.protectUvSeams,
     levels.map((level) => ({ ...level, screenSize: 0, distance: 0, hysteresis: 0 }))
   ]);
 
   if (lodCache?.key === key) return lodCache.lod;
 
-  const lod = simplifyGeometry(model.geometry, levels, settings);
+  const lod = simplifyGeometry(model.geometry, levels, modelSettings);
   const previous = lodCache;
 
   lodCache = { key, model, lod };
@@ -356,14 +519,15 @@ function buildPreview(current: Snapshot): void {
  * manual mode starts from where the levels already switched instead of from fixed placeholders.
  */
 function prefillManualSwitches(model: Model): void {
+  const modelSettings = getModelSettings(settings);
   const previousMode = snapshotMode;
 
-  snapshotMode = settings.thresholdMode;
+  snapshotMode = modelSettings.thresholdMode;
 
-  if (snapshot === null || snapshot.model !== model || previousMode === settings.thresholdMode || settings.thresholdMode === 'pixelError') return;
+  if (snapshot === null || snapshot.model !== model || previousMode === modelSettings.thresholdMode || modelSettings.thresholdMode === 'pixelError') return;
 
-  const levels = getLevels(settings);
-  const previous = { ...settings, thresholdMode: previousMode };
+  const levels = modelSettings.levels;
+  const previous = { thresholdMode: previousMode };
   const { thresholds, used, lod, fov } = snapshot;
 
   for (let i = 0; i < thresholds.length && i < levels.length; i++) {
@@ -387,8 +551,31 @@ function applyFov(): void {
   camera.updateProjectionMatrix();
 }
 
+function onWheel(event: WheelEvent): void {
+  event.preventDefault();
+
+  const lines = event.deltaMode === 1 ? 33 : event.deltaMode === 2 ? 800 : 1;
+  const amount = -event.deltaY * lines * wheelStep * (event.shiftKey ? 4 : 1);
+
+  camera.getWorldDirection(wheelForward);
+  wheelForward.y = 0;
+
+  if (wheelForward.lengthSq() < 1e-6) {
+    wheelForward.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    wheelForward.y = 0;
+  }
+
+  wheelForward.normalize().multiplyScalar(amount);
+  camera.position.add(wheelForward);
+  controls.target.add(wheelForward);
+  controls.update();
+  requestRender();
+}
+
 function resetCamera(): void {
   const defaultView = preview.getDefaultView(camera);
+
+  wheelStep = defaultView.far / 40000;
 
   camera.position.copy(defaultView.position);
   camera.far = defaultView.far;
@@ -434,12 +621,20 @@ function getHighlightedLevel(): number {
   return view.isolate ? view.selectedLevel : -1;
 }
 
+/**
+ * Adds a level after the last one, computed as the default levels from the triangles and the error of the last level shown.
+ */
 function addLevel(): void {
-  const levels = getLevels(settings);
+  const modelSettings = getModelSettings(settings);
+  const levels = modelSettings.levels;
+  const model = models.get(settings.model);
 
-  if (levels.length >= maxLevels) return;
+  if (levels.length >= maxLevels || model === undefined || snapshot === null) return;
 
-  levels.push(createNextLevel(levels.at(-1)));
+  const last = snapshot.lod.levels[snapshot.lod.levels.length - 1];
+  const previous = { triangles: getTriangles(last.geometry), error: last.error };
+
+  levels.push(computeNextLevel(model.geometry, modelSettings, levels, previous));
   update();
   selectLevel(levels.length);
 }
@@ -490,7 +685,8 @@ async function measureBuildTime(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   const start = performance.now();
-  const lod = simplifyGeometry(model.geometry, getLevels(settings), settings);
+  const modelSettings = getModelSettings(settings);
+  const lod = simplifyGeometry(model.geometry, modelSettings.levels, modelSettings);
 
   levelsPanel.setBuildTime(formatTime(performance.now() - start));
   disposeLOD(lod, model.geometry);
@@ -536,7 +732,8 @@ function onHistoryKey(event: KeyboardEvent): void {
 
 /**
  * Replaces the settings with the imported ones as one change of the current model, so that undo restores them, then shows the
- * imported model.
+ * imported model when it is a built-in one still available. Models opened from files keep their levels, except the shown one when the
+ * imported file was saved with a file model shown: it takes those levels.
  */
 function onImport(text: string): void {
   let imported: Settings;
@@ -550,27 +747,47 @@ function onImport(text: string): void {
   }
 
   const model = imported.model;
+  const levels = { ...settings.models };
+  const isFileToFile = !isBuiltInModel(model) && !isBuiltInModel(settings.model);
 
-  Object.assign(settings, imported, { model: settings.model });
+  for (const name of builtInModelNames) levels[name] = imported.models[name];
+
+  if (isFileToFile) levels[settings.model] = imported.models[model];
+
+  Object.assign(settings, imported, { model: settings.model, models: levels });
+
+  const shown = models.get(settings.model);
+  const shownSettings = getModelSettings(settings);
+
+  if (shown !== undefined && shownSettings.levelsPending) setDefaultLevels(shownSettings, shown);
+
   showSettings();
 
-  if (model !== settings.model) void selectModel(model);
+  if (isBuiltInModel(model) && model !== settings.model && !removedModels.includes(model)) void selectModel(model);
 }
 
 /**
- * Restores every setting to its default, keeping the current model, as one change that undo reverts.
+ * Restores the LOD settings of the current model and the preview settings to their defaults, as one change that undo reverts. The other
+ * models keep their settings.
  */
 function onReset(): void {
-  Object.assign(settings, createDefaultSettings(), { model: settings.model });
+  const model = models.get(settings.model);
+  const modelSettings = createModelSettings();
+
+  if (model !== undefined) setDefaultLevels(modelSettings, model);
+
+  Object.assign(settings, createDefaultSettings(), { model: settings.model, models: { ...settings.models, [settings.model]: modelSettings } });
   showSettings();
 }
 
 function showError(error: unknown): void {
-  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : 'Unexpected error.';
-
-  errorMessage.textContent = message;
+  errorMessage.textContent = getErrorMessage(error);
   errorBanner.hidden = false;
   console.error(error);
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : typeof error === 'string' ? error : 'Unexpected error.';
 }
 
 function hideError(): void {
